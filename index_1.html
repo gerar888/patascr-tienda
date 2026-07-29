@@ -1,0 +1,1097 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black" />
+<meta name="theme-color" content="#1c1917" />
+<title>Patas CR · Control de tienda</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  body { -webkit-tap-highlight-color: transparent; overscroll-behavior-y: contain; }
+  input, textarea, select { font-size: 16px; } /* evita el zoom automático en iOS */
+</style>
+</head>
+<body class="bg-stone-100">
+<div id="root"></div>
+
+<!-- ============================================================
+     PASO 1: pegá aquí la configuración de tu proyecto Firebase
+     (Consola de Firebase → Configuración del proyecto → Tus apps → Web)
+     ============================================================ -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {
+  initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
+  collection, doc, setDoc, deleteDoc, onSnapshot, writeBatch
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import {
+  getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+
+const firebaseConfig = {
+  apiKey: "PEGAR_AQUI",
+  authDomain: "PEGAR_AQUI.firebaseapp.com",
+  projectId: "PEGAR_AQUI",
+  storageBucket: "PEGAR_AQUI.appspot.com",
+  messagingSenderId: "PEGAR_AQUI",
+  appId: "PEGAR_AQUI"
+};
+
+const TIENDA = "patascr"; // si algún día abrís otra sucursal, cambiás esto
+
+const app = initializeApp(firebaseConfig);
+const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+  experimentalAutoDetectLongPolling: true
+});
+const auth = getAuth(app);
+
+const ruta = (col) => collection(db, "tiendas", TIENDA, col);
+
+window.FB = {
+  proyecto: firebaseConfig.projectId,
+  entrar: (correo, clave) => signInWithEmailAndPassword(auth, correo, clave),
+  salir: () => signOut(auth),
+  observarSesion: (cb) => onAuthStateChanged(auth, cb),
+  escuchar: (col, cb, onErr) =>
+    onSnapshot(ruta(col), { includeMetadataChanges: true },
+      (snap) => { cb(snap.docs.map((d) => ({ ...d.data(), id: d.id })), snap.metadata.fromCache); },
+      (err) => { console.error("Error leyendo " + col, err); onErr && onErr(err); }
+    ),
+  guardar: (col, obj) => setDoc(doc(ruta(col), obj.id), obj, { merge: true }),
+  borrar: (col, id) => deleteDoc(doc(ruta(col), id)),
+  guardarLote: async (col, arr) => {
+    for (let i = 0; i < arr.length; i += 400) {
+      const b = writeBatch(db);
+      arr.slice(i, i + 400).forEach((o) => b.set(doc(ruta(col), o.id), o, { merge: true }));
+      await b.commit();
+    }
+  }
+};
+window.dispatchEvent(new Event("fb-listo"));
+</script>
+
+<script type="text/babel" data-type="module">
+const { useState, useEffect, useMemo, useRef } = React;
+
+/* ================= helpers ================= */
+const C = (n) => "₡" + Math.round(n || 0).toLocaleString("es-CR");
+const UID = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const hoyISO = () => new Date().toLocaleDateString("en-CA");
+const mesDe = (iso) => (iso || "").slice(0, 7);
+const fmtFecha = (iso) => { const [y,m,d] = (iso||"").split("-"); return `${+d}/${+m}/${y}`; };
+const nombreDia = (iso) => { const [y,m,d] = iso.split("-").map(Number); return new Date(y, m-1, d).toLocaleDateString("es-CR", { weekday: "long" }); };
+const titulo = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+const num = (v) => parseFloat(String(v).replace(/[^\d.]/g, "")) || 0;
+
+const CATS = ["Mercadería", "Empaque", "Alquiler", "Servicios", "Transporte", "Marketing", "Impuestos", "Otro"];
+const PAGOS = ["Efectivo", "SINPE", "Tarjeta", "Otro"];
+const CFG_DEF = { id: "general", meta: 140000, costoPct: 80, excluirDomingos: true, margenGranel: 20, margenSaco: 15 };
+
+const margen = (precio, costo) => (precio > 0 ? ((precio - costo) / precio) * 100 : null);
+const partes = (t) => (t || "").split(/\s*\+\s*/).map((s) => s.trim()).filter(Boolean);
+const norm = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+
+function matchProducto(txt, precios) {
+  const t = norm(txt); if (!t) return null;
+  let best = null;
+  precios.forEach((p) => {
+    const n = norm(p.nombre); if (!n) return;
+    let score = 0;
+    if (t.includes(n) || n.includes(t)) score = Math.min(n.length, t.length);
+    else {
+      const pal = n.split(" ").filter((w) => w.length > 2);
+      const hits = pal.filter((w) => t.includes(w)).length;
+      if (hits >= 2 || (pal.length === 1 && hits === 1)) score = hits * 3;
+    }
+    if (score > 0 && (!best || score > best.score)) best = { p, score };
+  });
+  return best ? best.p : null;
+}
+const ratioCosto = (p) => {
+  if (p.precioKilo > 0 && p.peso > 0) return p.costo / p.peso / p.precioKilo;
+  if (p.precioSaco > 0) return p.costo / p.precioSaco;
+  return null;
+};
+
+/* ================= UI base ================= */
+const Card = ({ children, className = "" }) => <div className={"bg-white border border-stone-300 rounded-lg " + className}>{children}</div>;
+const Btn = ({ children, onClick, kind = "primary", className = "", disabled }) => {
+  const s = { primary: "bg-stone-900 text-white border-stone-900 active:bg-stone-700", ghost: "bg-white text-stone-800 border-stone-300 active:bg-stone-100", warn: "bg-amber-500 text-stone-900 border-amber-600 active:bg-amber-400" };
+  return <button onClick={onClick} disabled={disabled} className={`px-3 py-2 rounded-md border text-sm font-medium disabled:opacity-40 ${s[kind]} ${className}`}>{children}</button>;
+};
+const Lbl = ({ children }) => <span className="block text-[11px] uppercase tracking-wide text-stone-500 mb-1">{children}</span>;
+const Inp = (props) => <input {...props} className={"w-full px-3 py-2 border border-stone-300 rounded-md bg-stone-50 text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-400 " + (props.className || "")} />;
+const Linea = ({ label, val, fuerte }) => (
+  <div className="flex justify-between text-sm">
+    <span className={fuerte ? "font-medium" : "text-stone-600"}>{label}</span>
+    <span className={"font-mono tabular-nums " + (fuerte ? "font-semibold" : "text-stone-700")}>{val}</span>
+  </div>
+);
+const Modal = ({ title, onClose, children }) => (
+  <div className="fixed inset-0 z-50 bg-stone-900/60 flex items-end sm:items-center justify-center" onClick={onClose}>
+    <div className="bg-white w-full sm:max-w-lg rounded-t-xl sm:rounded-xl max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+      <div className="sticky top-0 bg-white border-b border-stone-200 px-4 py-3 flex items-center justify-between">
+        <h3 className="font-semibold">{title}</h3>
+        <button onClick={onClose} className="text-stone-500 text-xl px-2">×</button>
+      </div>
+      <div className="p-4">{children}</div>
+    </div>
+  </div>
+);
+const ind = (m, meta) => {
+  if (m === null || !isFinite(m)) return { s: "—", t: "Falta precio" };
+  if (m >= meta + 8) return { s: "★", t: "Sobre la meta" };
+  if (m >= meta) return { s: "○", t: "En meta" };
+  if (m >= meta - 4) return { s: "◐", t: "Apenas debajo" };
+  return { s: "●", t: "Margen muy bajo" };
+};
+
+/* ================= datos en vivo ================= */
+function useColeccion(col, sesion) {
+  const [datos, setDatos] = useState([]);
+  const [cache, setCache] = useState(false);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    if (!sesion) return;
+    setError(null);
+    return window.FB.escuchar(
+      col,
+      (d, fromCache) => { setDatos(d); setCache(fromCache); setError(null); },
+      (e) => setError(e.code || "error")
+    );
+  }, [col, sesion]);
+  return [datos, cache, error];
+}
+
+/* ================= App ================= */
+function App() {
+  const [fbListo, setFbListo] = useState(!!window.FB);
+  const [sesion, setSesion] = useState(undefined);
+  const [tab, setTab] = useState("registrar");
+  const [toast, setToast] = useState(null);
+
+  useEffect(() => {
+    if (fbListo) return;
+    const h = () => setFbListo(true);
+    window.addEventListener("fb-listo", h);
+    return () => window.removeEventListener("fb-listo", h);
+  }, [fbListo]);
+
+  useEffect(() => { if (fbListo) return window.FB.observarSesion((u) => setSesion(u || null)); }, [fbListo]);
+
+  const [ventas, offline, errVentas] = useColeccion("ventas", sesion);
+  const [gastos] = useColeccion("gastos", sesion);
+  const [precios] = useColeccion("precios", sesion);
+  const [fijos] = useColeccion("fijos", sesion);
+  const [cfgArr] = useColeccion("config", sesion);
+  const cfg = { ...CFG_DEF, ...(cfgArr[0] || {}) };
+
+  const aviso = (t) => { setToast(t); setTimeout(() => setToast(null), 2000); };
+  const guardar = async (col, obj) => { try { await window.FB.guardar(col, obj); } catch (e) { aviso("No se pudo guardar: " + e.code); } };
+  const borrar = async (col, id) => { try { await window.FB.borrar(col, id); } catch (e) { aviso("No se pudo borrar"); } };
+
+  if (!fbListo || sesion === undefined) return <div className="min-h-screen flex items-center justify-center text-stone-500 text-sm">Conectando…</div>;
+  if (!sesion) return <Login aviso={aviso} toast={toast} />;
+
+  const totalHoy = ventas.filter((v) => v.fecha === hoyISO()).reduce((a, v) => a + v.monto, 0);
+  const nHoy = ventas.filter((v) => v.fecha === hoyISO()).length;
+  const gastoHoy = gastos.filter((g) => g.fecha === hoyISO()).reduce((a, g) => a + g.monto, 0);
+
+  return (
+    <div className="min-h-screen text-stone-900 pb-24">
+      <header className="bg-stone-900 text-stone-100 px-4 pt-4 pb-5 sticky top-0 z-30">
+        <div className="flex items-baseline justify-between">
+          <span className="text-[11px] uppercase tracking-[0.2em] text-stone-400">Patas CR · San Blas</span>
+          <span className="text-[11px] text-stone-400 font-mono">
+            {errVentas ? "● sin acceso" : offline ? "◐ sin conexión" : "○ sincronizado"}
+          </span>
+        </div>
+        <div className="mt-2 flex items-end gap-3">
+          <div className="font-mono tabular-nums text-4xl tracking-tight">{C(totalHoy)}</div>
+          <div className="text-[11px] text-stone-400 pb-1.5 leading-tight">hoy<br />{nHoy} {nHoy === 1 ? "venta" : "ventas"}</div>
+        </div>
+        {gastoHoy > 0 && <div className="mt-1 font-mono tabular-nums text-[12px] text-stone-400">− {C(gastoHoy)} en salidas · queda {C(totalHoy - gastoHoy)}</div>}
+      </header>
+
+      <main className="px-3 pt-3 max-w-3xl mx-auto">
+        {offline && !errVentas && <AvisoOffline />}
+        {errVentas && (
+          <div className="border-2 border-stone-900 rounded-lg p-3 mb-3 bg-white">
+            <div className="text-sm font-medium mb-1">● No se está leyendo la base de datos</div>
+            <p className="text-[12px] text-stone-700 leading-relaxed mb-2">
+              Código del error: <span className="font-mono">{errVentas}</span>
+              <br />
+              Sesión iniciada con: <span className="font-mono">{sesion.email}</span>
+            </p>
+            {errVentas === "permission-denied" && (
+              <p className="text-[12px] text-stone-700 leading-relaxed">
+                Ese correo no está en las reglas de Firestore. Entrá a Firebase → Firestore Database → Reglas y verificá que{" "}
+                <span className="font-mono">{sesion.email}</span> aparezca escrito exactamente igual, entre comillas simples. Después tocá Publicar.
+              </p>
+            )}
+          </div>
+        )}
+        {tab === "registrar" && <Registrar ventas={ventas} gastos={gastos} fijos={fijos} guardar={guardar} borrar={borrar} aviso={aviso} usuario={sesion.email} />}
+        {tab === "historial" && <Historial ventas={ventas} gastos={gastos} guardar={guardar} borrar={borrar} aviso={aviso} />}
+        {tab === "precios" && <Precios precios={precios} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} />}
+        {tab === "reportes" && <Reportes ventas={ventas} gastos={gastos} precios={precios} fijos={fijos} cfg={cfg} guardar={guardar} aviso={aviso} correo={sesion.email} />}
+      </main>
+
+      {toast && <div className="fixed bottom-24 left-1/2 -translate-x-1/2 bg-stone-900 text-white text-sm px-4 py-2 rounded-full z-50 shadow-lg">{toast}</div>}
+
+      <nav className="fixed bottom-0 inset-x-0 bg-white border-t border-stone-300 grid grid-cols-4 z-40 pb-[env(safe-area-inset-bottom)]">
+        {[["registrar","Registrar"],["historial","Historial"],["precios","Precios"],["reportes","Reportes"]].map(([id,l]) => (
+          <button key={id} onClick={() => setTab(id)} className={"py-3 text-[12px] font-medium border-t-2 " + (tab === id ? "border-amber-500 text-stone-900" : "border-transparent text-stone-500")}>{l}</button>
+        ))}
+      </nav>
+    </div>
+  );
+}
+
+/* ================= LOGIN ================= */
+
+function AvisoOffline() {
+  const [rato, setRato] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setRato(true), 8000); return () => clearTimeout(t); }, []);
+  if (!rato) return null;
+  return (
+    <div className="border-2 border-stone-900 rounded-lg p-3 mb-3 bg-white">
+      <div className="text-sm font-medium mb-1">● Lleva rato sin poder conectarse</div>
+      <p className="text-[12px] text-stone-700 leading-relaxed">
+        Lo que registrés queda guardado solo en este dispositivo hasta que vuelva la conexión, y en los otros teléfonos no aparece.
+        <br /><br />
+        Proyecto configurado: <span className="font-mono">{window.FB.proyecto}</span> — verificá que sea el mismo que aparece arriba en la consola de Firebase.
+        <br /><br />
+        Si el proyecto es correcto y tenés internet, probá en una ventana de incógnito o con las extensiones del navegador apagadas: los bloqueadores de anuncios y rastreo suelen cortar la conexión de Firestore.
+      </p>
+    </div>
+  );
+}
+
+function Login({ aviso, toast }) {
+  const [correo, setCorreo] = useState("");
+  const [clave, setClave] = useState("");
+  const [cargando, setCargando] = useState(false);
+
+  const entrar = async () => {
+    setCargando(true);
+    try { await window.FB.entrar(correo.trim(), clave); }
+    catch (e) {
+      const m = { "auth/invalid-credential": "Correo o contraseña incorrectos", "auth/invalid-email": "Ese correo no es válido", "auth/too-many-requests": "Demasiados intentos, esperá un momento" };
+      aviso(m[e.code] || "No se pudo entrar");
+    }
+    setCargando(false);
+  };
+
+  return (
+    <div className="min-h-screen flex flex-col justify-center px-6 bg-stone-900">
+      <div className="max-w-sm w-full mx-auto">
+        <div className="text-[11px] uppercase tracking-[0.2em] text-stone-400 mb-1">Patas CR</div>
+        <div className="text-2xl text-stone-100 mb-6">Control de tienda</div>
+        <Inp type="email" inputMode="email" autoComplete="username" placeholder="Correo" value={correo} onChange={(e) => setCorreo(e.target.value)} className="mb-2" />
+        <Inp type="password" autoComplete="current-password" placeholder="Contraseña" value={clave} onChange={(e) => setClave(e.target.value)} className="mb-4" />
+        <Btn kind="warn" className="w-full py-3" disabled={cargando || !correo || !clave} onClick={entrar}>{cargando ? "Entrando…" : "Entrar"}</Btn>
+      </div>
+      {toast && <div className="fixed bottom-10 left-1/2 -translate-x-1/2 bg-white text-stone-900 text-sm px-4 py-2 rounded-full">{toast}</div>}
+    </div>
+  );
+}
+
+/* ================= REGISTRAR ================= */
+function Registrar({ ventas, gastos, fijos, guardar, borrar, aviso, usuario }) {
+  const [modo, setModo] = useState("venta");
+  return (
+    <div>
+      <div className="grid grid-cols-2 gap-1.5 mb-3">
+        {[["venta","Entra plata"],["gasto","Sale plata"]].map(([id,l]) => (
+          <button key={id} onClick={() => setModo(id)} className={"py-2.5 rounded-md border text-sm font-medium " + (modo === id ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300 text-stone-600")}>{l}</button>
+        ))}
+      </div>
+      {modo === "venta"
+        ? <VentaForm ventas={ventas} guardar={guardar} aviso={aviso} usuario={usuario} />
+        : <GastoForm gastos={gastos} fijos={fijos} guardar={guardar} borrar={borrar} aviso={aviso} usuario={usuario} />}
+    </div>
+  );
+}
+
+function VentaForm({ ventas, guardar, aviso, usuario }) {
+  const [fecha, setFecha] = useState(hoyISO());
+  const [prod, setProd] = useState("");
+  const [monto, setMonto] = useState("");
+  const [cliente, setCliente] = useState("");
+  const [pago, setPago] = useState("Efectivo");
+  const [importar, setImportar] = useState(false);
+
+  const productosPrev = useMemo(() => { const s = new Set(); ventas.forEach((v) => partes(v.producto).forEach((p) => s.add(p))); return [...s].sort(); }, [ventas]);
+  const clientesPrev = useMemo(() => [...new Set(ventas.map((v) => v.cliente).filter(Boolean))].sort(), [ventas]);
+  const recientes = useMemo(() => {
+    const c = {};
+    [...ventas].sort((a,b)=>(b.creado||0)-(a.creado||0)).slice(0,60).forEach((v) => partes(v.producto).forEach((p) => (c[p] = (c[p]||0)+1)));
+    return Object.entries(c).sort((a,b)=>b[1]-a[1]).slice(0,6).map((x)=>x[0]);
+  }, [ventas]);
+
+  const delDia = ventas.filter((v) => v.fecha === fecha).sort((a,b)=>(b.creado||0)-(a.creado||0));
+
+  const registrar = async () => {
+    const m = num(monto);
+    await guardar("ventas", { id: UID(), creado: Date.now(), fecha, producto: prod.trim(), monto: m, cliente: cliente.trim(), pago, usuario });
+    setProd(""); setMonto(""); setCliente("");
+    aviso("Venta guardada · " + C(m));
+  };
+
+  return (
+    <div>
+      <Card className="p-4 mb-3">
+        <div className="grid grid-cols-3 gap-2 mb-3">
+          <div className="col-span-2"><Lbl>Fecha</Lbl><Inp type="date" value={fecha} onChange={(e)=>setFecha(e.target.value)} className="font-mono" /></div>
+          <div><Lbl>Monto</Lbl><Inp inputMode="decimal" value={monto} onChange={(e)=>setMonto(e.target.value)} placeholder="0" className="font-mono tabular-nums text-lg" /></div>
+        </div>
+        <div className="mb-3">
+          <Lbl>Producto</Lbl>
+          <Inp list="prods" value={prod} onChange={(e)=>setProd(e.target.value)} placeholder="Nutri salmon perro" />
+          <datalist id="prods">{productosPrev.map((p)=><option key={p} value={p} />)}</datalist>
+          {recientes.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {recientes.map((p)=>(
+                <button key={p} onClick={()=>setProd(prod ? prod + " + " + p : p)} className="px-2 py-1 rounded-full border border-stone-300 bg-stone-50 text-[12px] active:bg-stone-200">{p}</button>
+              ))}
+            </div>
+          )}
+          <p className="text-[11px] text-stone-500 mt-1.5">Si lleva varias cosas, separalas con +</p>
+        </div>
+        <div className="mb-3">
+          <Lbl>Cliente (opcional)</Lbl>
+          <Inp list="clis" value={cliente} onChange={(e)=>setCliente(e.target.value)} placeholder="Daisy" />
+          <datalist id="clis">{clientesPrev.map((c)=><option key={c} value={c} />)}</datalist>
+        </div>
+        <Lbl>Pago</Lbl>
+        <div className="grid grid-cols-4 gap-1.5 mb-4">
+          {PAGOS.map((p)=>(
+            <button key={p} onClick={()=>setPago(p)} className={"py-2 rounded-md border text-[12px] " + (pago===p ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{p}</button>
+          ))}
+        </div>
+        <Btn kind="warn" className="w-full py-3 text-base" disabled={!prod.trim() || !monto} onClick={registrar}>Guardar venta</Btn>
+      </Card>
+
+      <div className="flex justify-between items-baseline px-1 mb-2">
+        <span className="text-[11px] uppercase tracking-wide text-stone-500">{fecha === hoyISO() ? "Hoy" : titulo(nombreDia(fecha)) + " " + fmtFecha(fecha)}</span>
+        <button onClick={()=>setImportar(true)} className="text-[11px] text-stone-500 underline">Pegar desde el Sheets</button>
+      </div>
+
+      {delDia.length === 0 ? <p className="text-sm text-stone-500 text-center py-6">Sin ventas en esta fecha.</p> : (
+        <Card className="divide-y divide-stone-100">
+          {delDia.map((v)=>(
+            <div key={v.id} className="px-3 py-2 flex justify-between items-center">
+              <div className="min-w-0">
+                <div className="text-sm truncate">{v.producto}</div>
+                <div className="text-[11px] text-stone-500">{[v.cliente, v.pago].filter(Boolean).join(" · ")}</div>
+              </div>
+              <span className="font-mono tabular-nums text-sm font-medium ml-2">{C(v.monto)}</span>
+            </div>
+          ))}
+          <div className="px-3 py-2 flex justify-between bg-stone-50">
+            <span className="text-sm font-medium">Total del día</span>
+            <span className="font-mono tabular-nums font-semibold">{C(delDia.reduce((a,v)=>a+v.monto,0))}</span>
+          </div>
+        </Card>
+      )}
+
+      {importar && <ImportarVentasModal onClose={()=>setImportar(false)} onSave={async (nuevas)=>{
+        await window.FB.guardarLote("ventas", nuevas.map((n)=>({ ...n, usuario })));
+        setImportar(false); aviso(nuevas.length + " ventas importadas");
+      }} />}
+    </div>
+  );
+}
+
+function parseVenta(l) {
+  let f = l.split("\t"); if (f.length < 3) f = l.split(/\s{2,}/); if (f.length < 3) return null;
+  const [fRaw, prod, mRaw, cli, pgo] = f.map((x)=>(x||"").trim());
+  const dm = fRaw.match(/(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/); if (!dm) return null;
+  const y = dm[3].length === 2 ? "20" + dm[3] : dm[3];
+  const p = (pgo || "").toLowerCase();
+  return {
+    id: UID(), creado: Date.now(),
+    fecha: `${y}-${dm[2].padStart(2,"0")}-${dm[1].padStart(2,"0")}`,
+    producto: prod, monto: num(mRaw), cliente: cli || "",
+    pago: p.includes("efec") ? "Efectivo" : p.includes("sinpe") ? "SINPE" : p.includes("tarj") ? "Tarjeta" : p ? "Otro" : "Efectivo"
+  };
+}
+
+function ImportarVentasModal({ onClose, onSave }) {
+  const [txt, setTxt] = useState("");
+  const filas = txt.split("\n").map((l)=>l.trim()).filter(Boolean).map(parseVenta).filter(Boolean);
+  return (
+    <Modal title="Pegar ventas desde el Sheets" onClose={onClose}>
+      <p className="text-[13px] text-stone-600 mb-2 leading-relaxed">Orden esperado: fecha, producto, monto, cliente, pago.</p>
+      <textarea value={txt} onChange={(e)=>setTxt(e.target.value)} rows={7} placeholder={"22/7/2026\tNutri salmon perro\t₡4,300\t\ttarjeta"} className="w-full px-3 py-2 border border-stone-300 rounded-md bg-stone-50 font-mono text-[12px]" />
+      <div className="my-3 text-sm">
+        {txt.trim() === "" ? <span className="text-stone-500">Esperando las filas.</span> : (
+          <><Linea label="Filas reconocidas" val={String(filas.length)} fuerte /><Linea label="Suma" val={C(filas.reduce((a,f)=>a+f.monto,0))} /></>
+        )}
+      </div>
+      <Btn kind="warn" className="w-full py-3" disabled={!filas.length} onClick={()=>onSave(filas)}>Importar {filas.length || ""}</Btn>
+    </Modal>
+  );
+}
+
+/* ================= GASTOS ================= */
+function GastoForm({ gastos, fijos, guardar, borrar, aviso, usuario }) {
+  const [fecha, setFecha] = useState(hoyISO());
+  const [cat, setCat] = useState("Mercadería");
+  const [detalle, setDetalle] = useState("");
+  const [monto, setMonto] = useState("");
+  const [pago, setPago] = useState("Efectivo");
+  const [verFijos, setVerFijos] = useState(false);
+
+  const provPrev = useMemo(()=>[...new Set(gastos.map((g)=>g.detalle).filter(Boolean))].sort(), [gastos]);
+  const delDia = gastos.filter((g)=>g.fecha === fecha);
+
+  const registrar = async () => {
+    const m = num(monto);
+    await guardar("gastos", { id: UID(), creado: Date.now(), fecha, categoria: cat, detalle: detalle.trim(), monto: m, pago, usuario });
+    setDetalle(""); setMonto("");
+    aviso("Salida guardada · " + C(m));
+  };
+
+  return (
+    <div>
+      <Card className="p-4 mb-3">
+        <div className="grid grid-cols-3 gap-2 mb-3">
+          <div className="col-span-2"><Lbl>Fecha</Lbl><Inp type="date" value={fecha} onChange={(e)=>setFecha(e.target.value)} className="font-mono" /></div>
+          <div><Lbl>Monto</Lbl><Inp inputMode="decimal" value={monto} onChange={(e)=>setMonto(e.target.value)} placeholder="0" className="font-mono tabular-nums text-lg" /></div>
+        </div>
+        <Lbl>En qué</Lbl>
+        <div className="flex flex-wrap gap-1.5 mb-3">
+          {CATS.map((c)=>(
+            <button key={c} onClick={()=>setCat(c)} className={"px-2.5 py-1.5 rounded-full border text-[12px] " + (cat===c ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{c}</button>
+          ))}
+        </div>
+        <div className="mb-3">
+          <Lbl>Proveedor o detalle</Lbl>
+          <Inp list="provs" value={detalle} onChange={(e)=>setDetalle(e.target.value)} placeholder="Central Veterinaria, factura 1023" />
+          <datalist id="provs">{provPrev.map((p)=><option key={p} value={p} />)}</datalist>
+        </div>
+        <Lbl>Cómo se pagó</Lbl>
+        <div className="grid grid-cols-4 gap-1.5 mb-4">
+          {PAGOS.map((p)=>(
+            <button key={p} onClick={()=>setPago(p)} className={"py-2 rounded-md border text-[12px] " + (pago===p ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{p}</button>
+          ))}
+        </div>
+        <Btn kind="warn" className="w-full py-3 text-base" disabled={!monto} onClick={registrar}>Guardar salida</Btn>
+      </Card>
+
+      <div className="flex justify-between items-baseline px-1 mb-2">
+        <span className="text-[11px] uppercase tracking-wide text-stone-500">{fecha === hoyISO() ? "Salidas de hoy" : "Salidas del " + fmtFecha(fecha)}</span>
+        <button onClick={()=>setVerFijos(true)} className="text-[11px] text-stone-500 underline">Gastos fijos del mes</button>
+      </div>
+
+      {delDia.length === 0 ? <p className="text-sm text-stone-500 text-center py-6">Sin salidas en esta fecha.</p> : (
+        <Card className="divide-y divide-stone-100">
+          {delDia.map((g)=>(
+            <div key={g.id} className="px-3 py-2 flex justify-between items-center">
+              <div className="min-w-0">
+                <div className="text-sm truncate">{g.detalle || g.categoria}</div>
+                <div className="text-[11px] text-stone-500">{g.categoria} · {g.pago}</div>
+              </div>
+              <span className="font-mono tabular-nums text-sm font-medium ml-2">− {C(g.monto)}</span>
+            </div>
+          ))}
+          <div className="px-3 py-2 flex justify-between bg-stone-50">
+            <span className="text-sm font-medium">Total salidas</span>
+            <span className="font-mono tabular-nums font-semibold">{C(delDia.reduce((a,g)=>a+g.monto,0))}</span>
+          </div>
+        </Card>
+      )}
+
+      {verFijos && <FijosModal fijos={fijos} gastos={gastos} guardar={guardar} borrar={borrar} onClose={()=>setVerFijos(false)} aviso={aviso} />}
+    </div>
+  );
+}
+
+function FijosModal({ fijos, gastos, guardar, borrar, onClose, aviso }) {
+  const [nombre, setNombre] = useState(""); const [monto, setMonto] = useState("");
+  const [cat, setCat] = useState("Alquiler"); const [dia, setDia] = useState("1");
+  const mesAct = mesDe(hoyISO());
+  const yaCargado = (f) => gastos.some((g)=>mesDe(g.fecha)===mesAct && g.fijoId===f.id);
+  const pendientes = fijos.filter((f)=>!yaCargado(f));
+  const totalFijos = fijos.reduce((a,f)=>a+f.monto,0);
+
+  const cargarMes = async () => {
+    const [y,m] = mesAct.split("-");
+    const ultimo = new Date(+y, +m, 0).getDate();
+    await window.FB.guardarLote("gastos", pendientes.map((f)=>({
+      id: UID(), creado: Date.now(), fijoId: f.id,
+      fecha: `${y}-${m}-${String(Math.min(f.dia, ultimo)).padStart(2,"0")}`,
+      categoria: f.categoria, detalle: f.nombre, monto: f.monto, pago: "Otro"
+    })));
+    aviso(pendientes.length + " gastos fijos cargados"); onClose();
+  };
+
+  return (
+    <Modal title="Gastos fijos del mes" onClose={onClose}>
+      <p className="text-[13px] text-stone-600 mb-3 leading-relaxed">Lo que se paga todos los meses pase lo que pase. Se guardan una vez y con un toque quedan registrados.</p>
+      {fijos.length > 0 && (
+        <Card className="divide-y divide-stone-100 mb-3">
+          {fijos.map((f)=>(
+            <div key={f.id} className="px-3 py-2 flex justify-between items-center">
+              <div>
+                <div className="text-sm"><span className="text-stone-500 mr-1.5">{yaCargado(f) ? "○" : "◐"}</span>{f.nombre}</div>
+                <div className="text-[11px] text-stone-500">{f.categoria} · día {f.dia} · {yaCargado(f) ? "ya cargado" : "pendiente"}</div>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="font-mono tabular-nums text-sm">{C(f.monto)}</span>
+                <button onClick={()=>borrar("fijos", f.id)} className="text-stone-400 text-lg">×</button>
+              </div>
+            </div>
+          ))}
+          <div className="px-3 py-2 flex justify-between bg-stone-50">
+            <span className="text-sm font-medium">Total fijo mensual</span>
+            <span className="font-mono tabular-nums font-semibold">{C(totalFijos)}</span>
+          </div>
+        </Card>
+      )}
+      {pendientes.length > 0 && <Btn kind="warn" className="w-full py-3 mb-4" onClick={cargarMes}>Cargar {pendientes.length} pendientes de {mesAct}</Btn>}
+      <div className="border-t border-stone-200 pt-3">
+        <Lbl>Agregar un gasto fijo</Lbl>
+        <Inp value={nombre} onChange={(e)=>setNombre(e.target.value)} placeholder="Alquiler del local" className="mb-2" />
+        <div className="grid grid-cols-2 gap-2 mb-2">
+          <Inp inputMode="decimal" value={monto} onChange={(e)=>setMonto(e.target.value)} placeholder="Monto" className="font-mono" />
+          <Inp inputMode="numeric" value={dia} onChange={(e)=>setDia(e.target.value)} placeholder="Día" className="font-mono" />
+        </div>
+        <div className="flex flex-wrap gap-1.5 mb-3">
+          {CATS.map((c)=>(<button key={c} onClick={()=>setCat(c)} className={"px-2.5 py-1.5 rounded-full border text-[12px] " + (cat===c ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{c}</button>))}
+        </div>
+        <Btn className="w-full" disabled={!nombre.trim() || !monto} onClick={async ()=>{
+          await guardar("fijos", { id: UID(), nombre: nombre.trim(), monto: num(monto), categoria: cat, dia: parseInt(dia)||1 });
+          setNombre(""); setMonto("");
+        }}>Agregar a la lista</Btn>
+      </div>
+      <p className="text-[11px] text-stone-500 mt-3">○ ya cargado este mes · ◐ pendiente</p>
+    </Modal>
+  );
+}
+
+/* ================= HISTORIAL ================= */
+function Historial({ ventas, gastos, guardar, borrar, aviso }) {
+  const [q, setQ] = useState(""); const [tipo, setTipo] = useState("todo");
+  const [edit, setEdit] = useState(null); const [editG, setEditG] = useState(null);
+
+  const grupos = useMemo(()=>{
+    const items = [
+      ...(tipo==="gasto" ? [] : ventas.map((v)=>({ ...v, _t:"venta", _txt: v.producto + " " + (v.cliente||"") }))),
+      ...(tipo==="venta" ? [] : gastos.map((g)=>({ ...g, _t:"gasto", _txt: (g.detalle||"") + " " + g.categoria })))
+    ].filter((x)=>!q || x._txt.toLowerCase().includes(q.toLowerCase()));
+    const m = {};
+    items.forEach((x)=>(m[x.fecha] = m[x.fecha] || []).push(x));
+    Object.values(m).forEach((l)=>l.sort((a,b)=>(b.creado||0)-(a.creado||0)));
+    return Object.entries(m).sort((a,b)=>(a[0]<b[0]?1:-1));
+  }, [ventas, gastos, q, tipo]);
+
+  return (
+    <div>
+      <Inp placeholder="Buscar producto, cliente o proveedor…" value={q} onChange={(e)=>setQ(e.target.value)} className="mb-2" />
+      <div className="flex gap-2 mb-3">
+        {[["todo","Todo"],["venta","Ventas"],["gasto","Salidas"]].map(([id,l])=>(
+          <button key={id} onClick={()=>setTipo(id)} className={"px-3 py-1.5 rounded-full border text-xs " + (tipo===id ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{l}</button>
+        ))}
+      </div>
+      {grupos.length === 0 && <p className="text-sm text-stone-500 text-center py-8">Nada que mostrar.</p>}
+      <div className="space-y-3">
+        {grupos.slice(0,40).map(([fecha, lista])=>{
+          const ent = lista.filter((x)=>x._t==="venta").reduce((a,x)=>a+x.monto,0);
+          const sal = lista.filter((x)=>x._t==="gasto").reduce((a,x)=>a+x.monto,0);
+          return (
+            <div key={fecha}>
+              <div className="flex justify-between items-baseline px-1 mb-1">
+                <span className="text-[11px] uppercase tracking-wide text-stone-500">{titulo(nombreDia(fecha))} {fmtFecha(fecha)}</span>
+                <span className="font-mono tabular-nums text-[12px] font-medium">{C(ent)}{sal>0 && <span className="text-stone-500"> − {C(sal)} = {C(ent-sal)}</span>}</span>
+              </div>
+              <Card className="divide-y divide-stone-100">
+                {lista.map((x)=>(
+                  <button key={x.id} onClick={()=>x._t==="venta" ? setEdit(x) : setEditG(x)} className="w-full text-left px-3 py-2 flex justify-between items-center active:bg-stone-50">
+                    <div className="min-w-0">
+                      <div className="text-sm truncate">{x._t==="venta" ? x.producto : (x.detalle || x.categoria)}</div>
+                      <div className="text-[11px] text-stone-500">{x._t==="venta" ? [x.cliente,x.pago].filter(Boolean).join(" · ") : `Salida · ${x.categoria} · ${x.pago}`}</div>
+                    </div>
+                    <span className="font-mono tabular-nums text-sm ml-2">{x._t==="venta" ? C(x.monto) : "− " + C(x.monto)}</span>
+                  </button>
+                ))}
+              </Card>
+            </div>
+          );
+        })}
+      </div>
+
+      {edit && <EditarVentaModal v={edit} onClose={()=>setEdit(null)}
+        onSave={async (nv)=>{ await guardar("ventas", nv); setEdit(null); aviso("Venta actualizada"); }}
+        onDelete={async (id)=>{ await borrar("ventas", id); setEdit(null); aviso("Venta eliminada"); }} />}
+
+      {editG && <EditarGastoModal g={editG} onClose={()=>setEditG(null)}
+        onSave={async (ng)=>{ await guardar("gastos", ng); setEditG(null); aviso("Salida actualizada"); }}
+        onDelete={async (id)=>{ await borrar("gastos", id); setEditG(null); aviso("Salida eliminada"); }} />}
+    </div>
+  );
+}
+
+function EditarVentaModal({ v, onClose, onSave, onDelete }) {
+  const [f, setF] = useState({ ...v, monto: String(v.monto) });
+  return (
+    <Modal title="Editar venta" onClose={onClose}>
+      <div className="grid grid-cols-3 gap-2 mb-3">
+        <div className="col-span-2"><Lbl>Fecha</Lbl><Inp type="date" value={f.fecha} onChange={(e)=>setF({...f, fecha:e.target.value})} className="font-mono" /></div>
+        <div><Lbl>Monto</Lbl><Inp inputMode="decimal" value={f.monto} onChange={(e)=>setF({...f, monto:e.target.value})} className="font-mono" /></div>
+      </div>
+      <div className="mb-3"><Lbl>Producto</Lbl><Inp value={f.producto} onChange={(e)=>setF({...f, producto:e.target.value})} /></div>
+      <div className="mb-3"><Lbl>Cliente</Lbl><Inp value={f.cliente || ""} onChange={(e)=>setF({...f, cliente:e.target.value})} /></div>
+      <Lbl>Pago</Lbl>
+      <div className="grid grid-cols-4 gap-1.5 mb-4">
+        {PAGOS.map((p)=>(<button key={p} onClick={()=>setF({...f, pago:p})} className={"py-2 rounded-md border text-[12px] " + (f.pago===p ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{p}</button>))}
+      </div>
+      <div className="flex gap-2">
+        <Btn kind="warn" className="flex-1 py-3" onClick={()=>onSave({ ...f, monto: num(f.monto) })}>Guardar</Btn>
+        <Btn kind="ghost" onClick={()=>onDelete(f.id)}>Eliminar</Btn>
+      </div>
+    </Modal>
+  );
+}
+
+function EditarGastoModal({ g, onClose, onSave, onDelete }) {
+  const [f, setF] = useState({ ...g, monto: String(g.monto) });
+  return (
+    <Modal title="Editar salida" onClose={onClose}>
+      <div className="grid grid-cols-3 gap-2 mb-3">
+        <div className="col-span-2"><Lbl>Fecha</Lbl><Inp type="date" value={f.fecha} onChange={(e)=>setF({...f, fecha:e.target.value})} className="font-mono" /></div>
+        <div><Lbl>Monto</Lbl><Inp inputMode="decimal" value={f.monto} onChange={(e)=>setF({...f, monto:e.target.value})} className="font-mono" /></div>
+      </div>
+      <Lbl>En qué</Lbl>
+      <div className="flex flex-wrap gap-1.5 mb-3">
+        {CATS.map((c)=>(<button key={c} onClick={()=>setF({...f, categoria:c})} className={"px-2.5 py-1.5 rounded-full border text-[12px] " + (f.categoria===c ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{c}</button>))}
+      </div>
+      <div className="mb-3"><Lbl>Proveedor o detalle</Lbl><Inp value={f.detalle || ""} onChange={(e)=>setF({...f, detalle:e.target.value})} /></div>
+      <Lbl>Cómo se pagó</Lbl>
+      <div className="grid grid-cols-4 gap-1.5 mb-4">
+        {PAGOS.map((p)=>(<button key={p} onClick={()=>setF({...f, pago:p})} className={"py-2 rounded-md border text-[12px] " + (f.pago===p ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{p}</button>))}
+      </div>
+      <div className="flex gap-2">
+        <Btn kind="warn" className="flex-1 py-3" onClick={()=>onSave({ ...f, monto: num(f.monto) })}>Guardar</Btn>
+        <Btn kind="ghost" onClick={()=>onDelete(f.id)}>Eliminar</Btn>
+      </div>
+    </Modal>
+  );
+}
+
+/* ================= PRECIOS ================= */
+function Precios({ precios, cfg, guardar, borrar, aviso }) {
+  const [q, setQ] = useState(""); const [edit, setEdit] = useState(null);
+  const [imp, setImp] = useState(false); const [soloBajos, setSoloBajos] = useState(false);
+
+  const dups = useMemo(()=>{
+    const c = {}; precios.forEach((p)=>(c[norm(p.nombre)] = (c[norm(p.nombre)]||0)+1));
+    return new Set(Object.keys(c).filter((k)=>c[k]>1));
+  }, [precios]);
+
+  const lista = precios
+    .filter((p)=>!q || norm(p.nombre).includes(norm(q)))
+    .filter((p)=>{
+      if (!soloBajos) return true;
+      const mg = p.precioKilo>0 && p.peso>0 ? margen(p.precioKilo, p.costo/p.peso) : null;
+      const ms = p.precioSaco>0 ? margen(p.precioSaco, p.costo) : null;
+      return (mg!==null && mg<cfg.margenGranel) || (ms!==null && ms<cfg.margenSaco);
+    })
+    .sort((a,b)=>a.nombre.localeCompare(b.nombre));
+
+  return (
+    <div>
+      <div className="flex gap-2 mb-3">
+        <Btn className="flex-1" onClick={()=>setEdit({ nuevo:true })}>+ Artículo</Btn>
+        <Btn kind="ghost" className="flex-1" onClick={()=>setImp(true)}>Pegar tabla</Btn>
+      </div>
+
+      {precios.length === 0 ? (
+        <Card className="p-6 text-center">
+          <div className="text-sm text-stone-700 mb-1">Cargá tu tabla de costos</div>
+          <p className="text-[13px] text-stone-500 leading-relaxed">Con "Pegar tabla" copiás las filas del Excel tal cual y la app recalcula el margen real de cada artículo.</p>
+        </Card>
+      ) : (
+        <>
+          <Inp placeholder="Buscar artículo…" value={q} onChange={(e)=>setQ(e.target.value)} className="mb-2" />
+          <div className="flex justify-between items-center mb-3 px-1">
+            <button onClick={()=>setSoloBajos(!soloBajos)} className="text-[12px] text-stone-600 underline">{soloBajos ? "Ver todos" : "Ver solo los que van bajo la meta"}</button>
+            <span className="text-[11px] text-stone-500 font-mono">{lista.length} de {precios.length}</span>
+          </div>
+          <div className="space-y-2">
+            {lista.map((p)=>{
+              const ck = p.peso>0 ? p.costo/p.peso : 0;
+              const mg = p.precioKilo>0 ? margen(p.precioKilo, ck) : null;
+              const ms = p.precioSaco>0 ? margen(p.precioSaco, p.costo) : null;
+              const ig = ind(mg, cfg.margenGranel), is = ind(ms, cfg.margenSaco);
+              return (
+                <Card key={p.id} className="p-3">
+                  <button onClick={()=>setEdit(p)} className="w-full text-left">
+                    <div className="flex justify-between items-start gap-2">
+                      <span className="text-sm font-medium">{p.nombre}{dups.has(norm(p.nombre)) && <span className="text-stone-500 ml-1.5">◐</span>}</span>
+                      <span className="font-mono tabular-nums text-[12px] text-stone-500 shrink-0">{p.peso} {p.unidad || "kg"}</span>
+                    </div>
+                    <div className="font-mono tabular-nums text-[11px] text-stone-500 mt-0.5">Costo {C(p.costo)} · {C(ck)} por {p.unidad==="u" ? "unidad" : "kilo"}</div>
+                    <div className="grid grid-cols-2 gap-2 mt-2 text-[12px]">
+                      <div className="bg-stone-50 rounded-md p-2">
+                        <div className="text-[10px] uppercase tracking-wide text-stone-500">Granel</div>
+                        <div className="font-mono tabular-nums">{p.precioKilo>0 ? C(p.precioKilo) : "—"}</div>
+                        <div className="font-mono tabular-nums text-[11px] text-stone-600">{ig.s} {mg===null ? "sin precio" : mg.toFixed(0)+"%"}</div>
+                      </div>
+                      <div className="bg-stone-50 rounded-md p-2">
+                        <div className="text-[10px] uppercase tracking-wide text-stone-500">Saco completo</div>
+                        <div className="font-mono tabular-nums">{p.precioSaco>0 ? C(p.precioSaco) : "—"}</div>
+                        <div className="font-mono tabular-nums text-[11px] text-stone-600">{is.s} {ms===null ? "sin precio" : ms.toFixed(0)+"%"}</div>
+                      </div>
+                    </div>
+                  </button>
+                </Card>
+              );
+            })}
+          </div>
+          <p className="text-[11px] text-stone-500 leading-relaxed mt-3">★ sobre la meta · ○ en meta · ◐ apenas debajo · ● margen muy bajo · — falta precio. Metas: granel {cfg.margenGranel}%, saco {cfg.margenSaco}%.</p>
+        </>
+      )}
+
+      {edit && <PrecioModal p={edit.nuevo ? null : edit} cfg={cfg} onClose={()=>setEdit(null)}
+        onSave={async (np)=>{ await guardar("precios", np); setEdit(null); aviso("Artículo guardado"); }}
+        onDelete={async (id)=>{ await borrar("precios", id); setEdit(null); aviso("Artículo eliminado"); }} />}
+
+      {imp && <ImportPreciosModal onClose={()=>setImp(false)} onSave={async (filas)=>{
+        await window.FB.guardarLote("precios", filas);
+        setImp(false); aviso(filas.length + " artículos cargados");
+      }} />}
+    </div>
+  );
+}
+
+function PrecioModal({ p, cfg, onClose, onSave, onDelete }) {
+  const [f, setF] = useState(p || { id: UID(), nombre:"", peso:"", costo:"", precioKilo:"", precioSaco:"", unidad:"kg" });
+  const peso = num(f.peso), costo = num(f.costo);
+  const ck = peso>0 ? costo/peso : 0;
+  const mg = num(f.precioKilo)>0 ? margen(num(f.precioKilo), ck) : null;
+  const ms = num(f.precioSaco)>0 ? margen(num(f.precioSaco), costo) : null;
+
+  return (
+    <Modal title={p ? "Editar artículo" : "Nuevo artículo"} onClose={onClose}>
+      <div className="mb-3"><Lbl>Artículo</Lbl><Inp value={f.nombre} onChange={(e)=>setF({...f, nombre:e.target.value})} placeholder="Dog chow raza pequeña" /></div>
+      <div className="grid grid-cols-3 gap-2 mb-3">
+        <div><Lbl>Contenido</Lbl><Inp inputMode="decimal" value={f.peso} onChange={(e)=>setF({...f, peso:e.target.value})} className="font-mono" /></div>
+        <div><Lbl>Unidad</Lbl><button onClick={()=>setF({...f, unidad: f.unidad==="kg" ? "u" : "kg"})} className="w-full px-3 py-2 border border-stone-300 rounded-md bg-stone-50 font-mono text-sm">{f.unidad==="kg" ? "kg" : "unid."}</button></div>
+        <div><Lbl>Costo total</Lbl><Inp inputMode="decimal" value={f.costo} onChange={(e)=>setF({...f, costo:e.target.value})} className="font-mono" /></div>
+      </div>
+      <div className="bg-stone-100 rounded-md p-3 mb-3"><Linea label={`Costo por ${f.unidad==="kg" ? "kilo" : "unidad"}`} val={C(ck)} fuerte /></div>
+      <div className="mb-3">
+        <Lbl>Precio de venta al granel</Lbl>
+        <Inp inputMode="decimal" value={f.precioKilo} onChange={(e)=>setF({...f, precioKilo:e.target.value})} className="font-mono text-lg" />
+        <div className="flex justify-between text-[11px] mt-1">
+          <span className="text-stone-500">Para {cfg.margenGranel}%: {C(ck/(1-cfg.margenGranel/100))}</span>
+          <span className="font-mono">{mg===null ? "—" : ind(mg,cfg.margenGranel).s + " " + mg.toFixed(1)+"%"}</span>
+        </div>
+      </div>
+      <div className="mb-4">
+        <Lbl>Precio del saco o empaque completo</Lbl>
+        <Inp inputMode="decimal" value={f.precioSaco} onChange={(e)=>setF({...f, precioSaco:e.target.value})} className="font-mono text-lg" />
+        <div className="flex justify-between text-[11px] mt-1">
+          <span className="text-stone-500">Para {cfg.margenSaco}%: {C(costo/(1-cfg.margenSaco/100))}</span>
+          <span className="font-mono">{ms===null ? "—" : ind(ms,cfg.margenSaco).s + " " + ms.toFixed(1)+"%"}</span>
+        </div>
+        {num(f.precioKilo)>0 && num(f.precioSaco)>0 && peso>0 && (
+          <p className="text-[11px] text-stone-500 mt-1">Comprando el saco pagan {C(num(f.precioSaco)/peso)} por {f.unidad==="kg" ? "kilo" : "unidad"}, {(100-(num(f.precioSaco)/peso/num(f.precioKilo))*100).toFixed(0)}% menos que al granel.</p>
+        )}
+      </div>
+      <div className="flex gap-2">
+        <Btn kind="warn" className="flex-1 py-3" disabled={!f.nombre} onClick={()=>onSave({ ...f, peso, costo, precioKilo: num(f.precioKilo), precioSaco: num(f.precioSaco) })}>Guardar</Btn>
+        {p && <Btn kind="ghost" onClick={()=>onDelete(f.id)}>Eliminar</Btn>}
+      </div>
+    </Modal>
+  );
+}
+
+function parsePrecio(l) {
+  let f = l.split("\t"); if (f.length < 3) f = l.split(/\s{2,}/); if (f.length < 3) return null;
+  const cel = f.map((x)=>(x||"").trim());
+  const nombre = cel[0], peso = num(cel[1]), costo = num(cel[2]);
+  if (!nombre || costo<=0 || peso<=0) return null;
+  const final = num(cel[cel.length-1]), ck = costo/peso;
+  const pareceSaco = peso>1 && final>ck*2 && Math.abs(final - costo*1.25)/(costo*1.25) < 0.2;
+  return { id: UID(), nombre, peso, costo, unidad:"kg", precioKilo: pareceSaco ? 0 : final, precioSaco: pareceSaco ? final : 0, _saco: pareceSaco };
+}
+
+function ImportPreciosModal({ onClose, onSave }) {
+  const [txt, setTxt] = useState("");
+  const filas = txt.split("\n").map((l)=>l.trim()).filter(Boolean).map(parsePrecio).filter(Boolean);
+  const sacos = filas.filter((f)=>f._saco);
+  return (
+    <Modal title="Pegar tabla de costos" onClose={onClose}>
+      <p className="text-[13px] text-stone-600 mb-2 leading-relaxed">Se leen <span className="font-medium">artículo, peso, costo</span> y la <span className="font-medium">última</span> columna como precio de venta. Las intermedias se ignoran porque el margen se recalcula.</p>
+      <textarea value={txt} onChange={(e)=>setTxt(e.target.value)} rows={7} placeholder={"Dog chow raza pequeña\t25\t₡42,500\t₡1,700\t20%\t₡2,125\t₡2,200"} className="w-full px-3 py-2 border border-stone-300 rounded-md bg-stone-50 font-mono text-[12px]" />
+      <div className="my-3 text-sm">
+        {txt.trim()==="" ? <span className="text-stone-500">Esperando las filas.</span> : (
+          <>
+            <Linea label="Artículos reconocidos" val={String(filas.length)} fuerte />
+            {sacos.length>0 && <p className="text-[12px] text-stone-600 mt-2 leading-relaxed">◐ En {sacos.length} filas el precio parece ser del empaque completo ({sacos.slice(0,3).map((s)=>s.nombre).join(", ")}{sacos.length>3?"…":""}). Se guardan como precio de saco.</p>}
+          </>
+        )}
+      </div>
+      <Btn kind="warn" className="w-full py-3" disabled={!filas.length} onClick={()=>onSave(filas.map(({_saco, ...r})=>r))}>Cargar {filas.length || ""}</Btn>
+    </Modal>
+  );
+}
+
+/* ================= REPORTES ================= */
+function Reportes({ ventas, gastos, precios, fijos, cfg, guardar, aviso, correo }) {
+  const [ajustes, setAjustes] = useState(false);
+  const [mes, setMes] = useState(mesDe(hoyISO()));
+
+  const meses = useMemo(()=>[...new Set([...ventas,...gastos].map((v)=>mesDe(v.fecha)))].sort().reverse(), [ventas,gastos]);
+  const delMes = ventas.filter((v)=>mesDe(v.fecha)===mes);
+  const gastosMes = gastos.filter((g)=>mesDe(g.fecha)===mes);
+  const total = delMes.reduce((a,v)=>a+v.monto,0);
+  const salidas = gastosMes.reduce((a,g)=>a+g.monto,0);
+  const mercaderia = gastosMes.filter((g)=>g.categoria==="Mercadería").reduce((a,g)=>a+g.monto,0);
+  const efectivoNeto = delMes.filter((v)=>v.pago==="Efectivo").reduce((a,v)=>a+v.monto,0) - gastosMes.filter((g)=>g.pago==="Efectivo").reduce((a,g)=>a+g.monto,0);
+  const ticket = delMes.length ? total/delMes.length : 0;
+
+  const conCosto = useMemo(()=>{
+    let vi=0, ci=0, si=0;
+    delMes.forEach((v)=>{
+      const ps = partes(v.producto), porParte = v.monto/ps.length;
+      ps.forEach((txt)=>{
+        const p = matchProducto(txt, precios), r = p ? ratioCosto(p) : null;
+        if (r && r>0 && r<1) { vi += porParte; ci += porParte*r; } else si += porParte;
+      });
+    });
+    return { vi, ci, si, cobertura: total>0 ? (vi/total)*100 : 0 };
+  }, [delMes, precios]);
+  const margenReal = conCosto.vi>0 ? margen(conCosto.vi, conCosto.ci) : null;
+  const ganancia = total * (1 - cfg.costoPct/100);
+
+  const totalFijos = fijos.reduce((a,f)=>a+f.monto,0);
+  const pctMargen = margenReal !== null ? margenReal : 100 - cfg.costoPct;
+  const equilibrio = pctMargen>0 ? totalFijos/(pctMargen/100) : 0;
+
+  const [ay, am] = mes.split("-").map(Number);
+  const hoy = new Date(), esMesActual = mes === mesDe(hoyISO());
+  const diasMes = new Date(ay, am, 0).getDate();
+  const hasta = esMesActual ? hoy.getDate() : diasMes;
+  const cuenta = (a,b)=>{ let n=0; for(let d=a; d<=b; d++) if(!(cfg.excluirDomingos && new Date(ay,am-1,d).getDay()===0)) n++; return n; };
+  const habT = cuenta(1,hasta), habTotal = cuenta(1,diasMes);
+  const promDia = habT ? total/habT : 0, proy = promDia*habTotal;
+  const avance = cfg.meta>0 ? (total/cfg.meta)*100 : 0;
+
+  const porPago = PAGOS.map((p)=>({ p, t: delMes.filter((v)=>v.pago===p).reduce((a,v)=>a+v.monto,0) })).filter((x)=>x.t>0);
+  const porCat = CATS.map((c)=>({ c, t: gastosMes.filter((g)=>g.categoria===c).reduce((a,g)=>a+g.monto,0) })).filter((x)=>x.t>0).sort((a,b)=>b.t-a.t);
+
+  const porProd = useMemo(()=>{
+    const m = {};
+    delMes.forEach((v)=>{ const ps = partes(v.producto); ps.forEach((p)=>{ const k = norm(p); if(!m[k]) m[k]={nombre:p,veces:0,monto:0}; m[k].veces++; m[k].monto += v.monto/ps.length; }); });
+    return Object.values(m).sort((a,b)=>b.monto-a.monto);
+  }, [delMes]);
+
+  const porCli = useMemo(()=>{
+    const m = {};
+    delMes.filter((v)=>v.cliente).forEach((v)=>{ const k = norm(v.cliente); if(!m[k]) m[k]={nombre:v.cliente,veces:0,monto:0}; m[k].veces++; m[k].monto+=v.monto; });
+    return Object.values(m).sort((a,b)=>b.monto-a.monto);
+  }, [delMes]);
+
+  const porDia = useMemo(()=>{
+    const m = {}; delMes.forEach((v)=>(m[v.fecha]=(m[v.fecha]||0)+v.monto));
+    const arr = Object.entries(m).sort(); const max = Math.max(...arr.map((x)=>x[1]),1);
+    return arr.map(([f,t])=>({ f, t, pct:(t/max)*100 }));
+  }, [delMes]);
+
+  const exportar = () => {
+    const filas = [["fecha","tipo","detalle","categoria","monto","cliente","pago"],
+      ...ventas.map((v)=>[fmtFecha(v.fecha),"Venta",v.producto,"",v.monto,v.cliente||"",v.pago]),
+      ...gastos.map((g)=>[fmtFecha(g.fecha),"Salida",g.detalle||"",g.categoria,-g.monto,"",g.pago])];
+    const csv = filas.map((r)=>r.map((c)=>`"${String(c).replace(/"/g,'""')}"`).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob(["\ufeff"+csv], { type:"text/csv;charset=utf-8;" }));
+    const a = document.createElement("a"); a.href = url; a.download = `patas-${hoyISO()}.csv`; a.click(); URL.revokeObjectURL(url);
+    aviso("CSV descargado");
+  };
+
+  return (
+    <div className="space-y-3">
+      {meses.length>1 && (
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {meses.map((m)=>(<button key={m} onClick={()=>setMes(m)} className={"px-3 py-1.5 rounded-full border text-xs whitespace-nowrap font-mono " + (mes===m ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{m}</button>))}
+        </div>
+      )}
+
+      <Card className="p-4">
+        <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-3">Resumen del mes</div>
+        <div className="grid grid-cols-2 gap-y-3">
+          <B k="Ventas" v={C(total)} grande />
+          <B k="Ganancia estimada" v={C(ganancia)} sub={`asumiendo ${cfg.costoPct}% de costo`} grande />
+          <B k="Ventas registradas" v={String(delMes.length)} />
+          <B k="Tiquete promedio" v={C(ticket)} />
+        </div>
+      </Card>
+
+      {precios.length>0 && (
+        <Card className="p-4">
+          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Margen con costos reales</div>
+          {conCosto.vi===0 ? <p className="text-sm text-stone-600">Ninguna venta del mes se pudo cruzar con la tabla de precios.</p> : (
+            <div className="space-y-1">
+              <Linea label="Ventas identificadas" val={`${C(conCosto.vi)} · ${conCosto.cobertura.toFixed(0)}%`} />
+              <Linea label="Costo de esas ventas" val={C(conCosto.ci)} />
+              <Linea label="Ganancia identificada" val={`${C(conCosto.vi-conCosto.ci)} · ${margenReal.toFixed(1)}%`} fuerte />
+              {conCosto.si>0 && <p className="text-[11px] text-stone-500 pt-2">Quedaron {C(conCosto.si)} sin identificar; para esos se usa el {cfg.costoPct}% estimado.</p>}
+            </div>
+          )}
+        </Card>
+      )}
+
+      <Card className="p-4">
+        <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Entró y salió</div>
+        <div className="space-y-1">
+          <Linea label="Entró por ventas" val={C(total)} />
+          <Linea label="Salió en compras y gastos" val={"− " + C(salidas)} />
+          <div className="pt-2 mt-1 border-t border-stone-200"><Linea label={total-salidas>=0 ? "Quedó" : "Faltó"} val={C(Math.abs(total-salidas))} fuerte /></div>
+        </div>
+        <div className="mt-3 pt-3 border-t border-stone-200 space-y-1">
+          <Linea label="Efectivo neto en caja" val={C(efectivoNeto)} />
+          <Linea label="Compra de mercadería" val={C(mercaderia)} />
+        </div>
+        <p className="text-[11px] text-stone-500 mt-3 leading-relaxed">Esto es plata que entró y salió, no margen: si compran de más un mes, ese mes se ve peor y el siguiente mejor.</p>
+      </Card>
+
+      {totalFijos>0 && (
+        <Card className="p-4">
+          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Punto de equilibrio</div>
+          <div className="space-y-1">
+            <Linea label="Gastos fijos del mes" val={C(totalFijos)} />
+            <Linea label="Margen usado" val={pctMargen.toFixed(1)+"%"} />
+            <Linea label="Hay que vender" val={C(equilibrio)} fuerte />
+            <Linea label={total>=equilibrio ? "Ya se cubrió, sobra" : "Falta vender"} val={C(Math.abs(equilibrio-total))} />
+          </div>
+        </Card>
+      )}
+
+      <Card className="p-4">
+        <div className="flex justify-between items-baseline mb-2">
+          <span className="text-[11px] uppercase tracking-[0.15em] text-stone-500">Meta del mes</span>
+          <span className="font-mono tabular-nums text-sm">{C(total)} / {C(cfg.meta)}</span>
+        </div>
+        <div className="h-3 bg-stone-200 rounded-full overflow-hidden border border-stone-300"><div className="h-full bg-stone-900" style={{ width: Math.min(100,avance)+"%" }} /></div>
+        <div className="mt-2 font-mono tabular-nums text-sm">{avance.toFixed(0)}% de la meta</div>
+        <div className="mt-3 pt-3 border-t border-stone-200 space-y-1">
+          <Linea label={`Promedio por día${cfg.excluirDomingos ? " (sin domingos)" : ""}`} val={C(promDia)} />
+          <Linea label="Proyección al cierre" val={C(proy)} fuerte />
+          {esMesActual && <Linea label="Días de venta que faltan" val={String(habTotal-habT)} />}
+        </div>
+      </Card>
+
+      {porPago.length>0 && (
+        <Card className="p-4">
+          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Cómo pagaron</div>
+          {porPago.map((x)=><Linea key={x.p} label={x.p} val={`${C(x.t)} · ${((x.t/total)*100).toFixed(0)}%`} />)}
+        </Card>
+      )}
+
+      {porCat.length>0 && (
+        <Card className="p-4">
+          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">En qué se fue la plata</div>
+          {porCat.map((x)=><Linea key={x.c} label={x.c} val={`${C(x.t)} · ${((x.t/salidas)*100).toFixed(0)}%`} />)}
+        </Card>
+      )}
+
+      {porDia.length>0 && (
+        <Card className="p-4">
+          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Venta por día</div>
+          {porDia.map((d)=>(
+            <div key={d.f} className="flex items-center gap-2 py-1">
+              <span className="font-mono text-[11px] text-stone-500 w-14 shrink-0">{fmtFecha(d.f).slice(0,5)}</span>
+              <div className="flex-1 h-2.5 bg-stone-200 rounded-sm overflow-hidden"><div className="h-full bg-stone-800" style={{ width: d.pct+"%" }} /></div>
+              <span className="font-mono tabular-nums text-[12px] w-20 text-right">{C(d.t)}</span>
+            </div>
+          ))}
+        </Card>
+      )}
+
+      <Card className="p-4">
+        <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-1">Qué se vende más</div>
+        <p className="text-[11px] text-stone-500 mb-2">Cuando una venta lleva varios productos, el monto se reparte.</p>
+        {porProd.slice(0,20).map((x,i)=>(
+          <div key={i} className="flex justify-between py-1.5 border-b border-stone-100 last:border-0">
+            <span className="text-sm truncate mr-2">{x.nombre}</span>
+            <span className="font-mono tabular-nums text-[12px] shrink-0">{x.veces}× · {C(x.monto)}</span>
+          </div>
+        ))}
+      </Card>
+
+      {porCli.length>0 && (
+        <Card className="p-4">
+          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Clientes del mes</div>
+          {porCli.slice(0,15).map((x,i)=>(
+            <div key={i} className="flex justify-between py-1.5 border-b border-stone-100 last:border-0">
+              <span className="text-sm">{x.veces>1 && <span className="text-stone-500 mr-1.5">★</span>}{x.nombre}</span>
+              <span className="font-mono tabular-nums text-[12px]">{x.veces}× · {C(x.monto)}</span>
+            </div>
+          ))}
+          <p className="text-[11px] text-stone-500 mt-2">★ compró más de una vez este mes.</p>
+        </Card>
+      )}
+
+      <div className="flex gap-2">
+        <Btn kind="ghost" className="flex-1" onClick={exportar}>Descargar CSV</Btn>
+        <Btn kind="ghost" className="flex-1" onClick={()=>setAjustes(true)}>Ajustes</Btn>
+      </div>
+
+      <div className="text-center pt-2 pb-4">
+        <div className="text-[11px] text-stone-500 mb-2">{correo}</div>
+        <button onClick={()=>window.FB.salir()} className="text-[12px] text-stone-600 underline">Cerrar sesión</button>
+      </div>
+
+      {ajustes && <AjustesModal cfg={cfg} guardar={guardar} onClose={()=>setAjustes(false)} />}
+    </div>
+  );
+}
+
+const B = ({ k, v, sub, grande }) => (
+  <div>
+    <div className="text-[10px] uppercase tracking-wide text-stone-500">{k}</div>
+    <div className={"font-mono tabular-nums " + (grande ? "text-xl font-semibold" : "text-base")}>{v}</div>
+    {sub && <div className="text-[11px] text-stone-500">{sub}</div>}
+  </div>
+);
+
+function AjustesModal({ cfg, guardar, onClose }) {
+  const [f, setF] = useState(cfg);
+  return (
+    <Modal title="Ajustes" onClose={onClose}>
+      <div className="mb-3"><Lbl>Meta de ventas del mes</Lbl><Inp inputMode="decimal" value={f.meta} onChange={(e)=>setF({...f, meta:num(e.target.value)})} className="font-mono" /></div>
+      <div className="mb-3">
+        <Lbl>Costo del producto (%)</Lbl>
+        <Inp inputMode="decimal" value={f.costoPct} onChange={(e)=>setF({...f, costoPct:num(e.target.value)})} className="font-mono" />
+        <p className="text-[11px] text-stone-500 mt-1">Solo se usa para las ventas que no calzan con la tabla de precios.</p>
+      </div>
+      <div className="grid grid-cols-2 gap-3 mb-3">
+        <div><Lbl>Margen meta granel (%)</Lbl><Inp inputMode="decimal" value={f.margenGranel} onChange={(e)=>setF({...f, margenGranel:num(e.target.value)})} className="font-mono" /></div>
+        <div><Lbl>Margen meta saco (%)</Lbl><Inp inputMode="decimal" value={f.margenSaco} onChange={(e)=>setF({...f, margenSaco:num(e.target.value)})} className="font-mono" /></div>
+      </div>
+      <div className="mb-4">
+        <Lbl>Proyección</Lbl>
+        <button onClick={()=>setF({...f, excluirDomingos: !f.excluirDomingos})} className="w-full px-3 py-2 border border-stone-300 rounded-md bg-stone-50 text-left text-sm">
+          {f.excluirDomingos ? "○" : "—"} Excluir domingos del cálculo
+        </button>
+      </div>
+      <Btn kind="warn" className="w-full py-3" onClick={async ()=>{ await guardar("config", { ...f, id:"general" }); onClose(); }}>Guardar ajustes</Btn>
+    </Modal>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
