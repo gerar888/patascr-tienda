@@ -28,19 +28,20 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
-  collection, doc, setDoc, deleteDoc, onSnapshot, writeBatch
+  collection, doc, setDoc, deleteDoc, onSnapshot, writeBatch,
+  disableNetwork, enableNetwork
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import {
   getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyACy5Q_HgwBBpMmiEaLWZBKgUWB55cLT1A",
-  authDomain: "patascr-tienda.firebaseapp.com",
-  projectId: "patascr-tienda",
-  storageBucket: "patascr-tienda.firebasestorage.app",
-  messagingSenderId: "540036190381",
-  appId: "1:540036190381:web:9736a05264926960e6b624"
+  apiKey: "PEGAR_AQUI",
+  authDomain: "PEGAR_AQUI.firebaseapp.com",
+  projectId: "PEGAR_AQUI",
+  storageBucket: "PEGAR_AQUI.appspot.com",
+  messagingSenderId: "PEGAR_AQUI",
+  appId: "PEGAR_AQUI"
 };
 
 const TIENDA = "patascr"; // si algún día abrís otra sucursal, cambiás esto
@@ -48,7 +49,7 @@ const TIENDA = "patascr"; // si algún día abrís otra sucursal, cambiás esto
 const app = initializeApp(firebaseConfig);
 const db = initializeFirestore(app, {
   localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
-  experimentalAutoDetectLongPolling: true
+  experimentalForceLongPolling: true
 });
 const auth = getAuth(app);
 
@@ -56,6 +57,19 @@ const ruta = (col) => collection(db, "tiendas", TIENDA, col);
 
 window.FB = {
   proyecto: firebaseConfig.projectId,
+  diagnostico: async () => {
+    const u = auth.currentUser;
+    let token = null;
+    try { token = u ? await u.getIdToken() : null; } catch (e) {}
+    const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/(default)/documents/tiendas?pageSize=1`;
+    try {
+      const r = await fetch(url, { headers: token ? { Authorization: "Bearer " + token } : {} });
+      const cuerpo = await r.text();
+      return { status: r.status, cuerpo: cuerpo.slice(0, 400) };
+    } catch (e) {
+      return { status: 0, cuerpo: String(e.message || e) };
+    }
+  },
   entrar: (correo, clave) => signInWithEmailAndPassword(auth, correo, clave),
   salir: () => signOut(auth),
   observarSesion: (cb) => onAuthStateChanged(auth, cb),
@@ -66,13 +80,18 @@ window.FB = {
     ),
   guardar: (col, obj) => setDoc(doc(ruta(col), obj.id), obj, { merge: true }),
   borrar: (col, id) => deleteDoc(doc(ruta(col), id)),
-  guardarLote: async (col, arr) => {
-    for (let i = 0; i < arr.length; i += 400) {
+  guardarLote: async (col, arr, onProgreso) => {
+    const TANDA = 20;
+    for (let i = 0; i < arr.length; i += TANDA) {
+      const trozo = arr.slice(i, i + TANDA);
       const b = writeBatch(db);
-      arr.slice(i, i + 400).forEach((o) => b.set(doc(ruta(col), o.id), o, { merge: true }));
+      trozo.forEach((o) => b.set(doc(ruta(col), o.id), o, { merge: true }));
       await b.commit();
+      if (onProgreso) onProgreso(Math.min(i + TANDA, arr.length), arr.length);
+      await new Promise((r) => setTimeout(r, 150));
     }
-  }
+  },
+  reconectar: async () => { await disableNetwork(db); await enableNetwork(db); }
 };
 window.dispatchEvent(new Event("fb-listo"));
 </script>
@@ -259,18 +278,48 @@ function App() {
 
 function AvisoOffline() {
   const [rato, setRato] = useState(false);
+  const [res, setRes] = useState(null);
+  const [probando, setProbando] = useState(false);
   useEffect(() => { const t = setTimeout(() => setRato(true), 8000); return () => clearTimeout(t); }, []);
   if (!rato) return null;
+
+  const probar = async () => { setProbando(true); setRes(await window.FB.diagnostico()); setProbando(false); };
+
+  const lectura = (s) => {
+    if (s === 200) return "La red sí llega a Firestore y los permisos están bien. El problema es el canal en tiempo real: cerrá y volvé a abrir la app, y si sigue, probá otro navegador.";
+    if (s === 0) return "La petición ni salió del navegador. La está bloqueando una extensión (bloqueador de anuncios o rastreo) o la red. Probá en incógnito con extensiones desactivadas, o desde los datos del celular.";
+    if (s === 403) return "La red llega pero el acceso está denegado. Revisá las reglas de Firestore, o que la API de Cloud Firestore esté habilitada en el proyecto.";
+    if (s === 404) return "El proyecto responde pero no encuentra la base de datos (default). Es probable que tu base tenga otro nombre: revisá el desplegable al lado de 'Database' en la consola de Firestore.";
+    if (s === 401) return "El token de sesión no se aceptó. Cerrá sesión y volvé a entrar.";
+    return "Respuesta inesperada. Mandame el código y el texto de abajo.";
+  };
+
   return (
     <div className="border-2 border-stone-900 rounded-lg p-3 mb-3 bg-white">
       <div className="text-sm font-medium mb-1">● Lleva rato sin poder conectarse</div>
       <p className="text-[12px] text-stone-700 leading-relaxed">
         Lo que registrés queda guardado solo en este dispositivo hasta que vuelva la conexión, y en los otros teléfonos no aparece.
         <br /><br />
-        Proyecto configurado: <span className="font-mono">{window.FB.proyecto}</span> — verificá que sea el mismo que aparece arriba en la consola de Firebase.
-        <br /><br />
-        Si el proyecto es correcto y tenés internet, probá en una ventana de incógnito o con las extensiones del navegador apagadas: los bloqueadores de anuncios y rastreo suelen cortar la conexión de Firestore.
+        Proyecto configurado: <span className="font-mono">{window.FB.proyecto}</span>
       </p>
+      <div className="flex gap-2 mt-2">
+        <Btn kind="ghost" className="text-xs py-1.5" onClick={probar} disabled={probando}>
+          {probando ? "Probando…" : "Probar conexión"}
+        </Btn>
+        <Btn kind="ghost" className="text-xs py-1.5" onClick={() => window.FB.reconectar()}>
+          Reintentar conexión
+        </Btn>
+      </div>
+      {res && (
+        <div className="mt-3 border-t border-stone-200 pt-2">
+          <div className="font-mono text-[12px] mb-1">Código: {res.status === 0 ? "sin respuesta" : res.status}</div>
+          <p className="text-[12px] text-stone-700 leading-relaxed mb-2">{lectura(res.status)}</p>
+          <details>
+            <summary className="text-[11px] text-stone-500 cursor-pointer">Ver detalle técnico</summary>
+            <pre className="text-[10px] whitespace-pre-wrap mt-1 text-stone-600">{res.cuerpo}</pre>
+          </details>
+        </div>
+      )}
     </div>
   );
 }
@@ -403,8 +452,8 @@ function VentaForm({ ventas, guardar, aviso, usuario }) {
         </Card>
       )}
 
-      {importar && <ImportarVentasModal onClose={()=>setImportar(false)} onSave={async (nuevas)=>{
-        await window.FB.guardarLote("ventas", nuevas.map((n)=>({ ...n, usuario })));
+      {importar && <ImportarVentasModal onClose={()=>setImportar(false)} onSave={async (nuevas, prog)=>{
+        await window.FB.guardarLote("ventas", nuevas.map((n)=>({ ...n, usuario })), prog);
         setImportar(false); aviso(nuevas.length + " ventas importadas");
       }} />}
     </div>
@@ -427,7 +476,20 @@ function parseVenta(l) {
 
 function ImportarVentasModal({ onClose, onSave }) {
   const [txt, setTxt] = useState("");
+  const [prog, setProg] = useState(null);
+  const [err, setErr] = useState(null);
   const filas = txt.split("\n").map((l)=>l.trim()).filter(Boolean).map(parseVenta).filter(Boolean);
+
+  const subir = async () => {
+    setErr(null); setProg({ hecho: 0, total: filas.length });
+    try {
+      await onSave(filas, (hecho, total) => setProg({ hecho, total }));
+    } catch (e) {
+      setErr((e.code || "error") + " · " + (e.message || ""));
+      setProg(null);
+    }
+  };
+
   return (
     <Modal title="Pegar ventas desde el Sheets" onClose={onClose}>
       <p className="text-[13px] text-stone-600 mb-2 leading-relaxed">Orden esperado: fecha, producto, monto, cliente, pago.</p>
@@ -437,7 +499,14 @@ function ImportarVentasModal({ onClose, onSave }) {
           <><Linea label="Filas reconocidas" val={String(filas.length)} fuerte /><Linea label="Suma" val={C(filas.reduce((a,f)=>a+f.monto,0))} /></>
         )}
       </div>
-      <Btn kind="warn" className="w-full py-3" disabled={!filas.length} onClick={()=>onSave(filas)}>Importar {filas.length || ""}</Btn>
+      {prog && (
+        <div className="mb-3">
+          <div className="h-2 bg-stone-200 rounded-full overflow-hidden"><div className="h-full bg-stone-900" style={{ width: (prog.hecho/prog.total*100)+"%" }} /></div>
+          <div className="font-mono text-[12px] mt-1">Subiendo {prog.hecho} de {prog.total}…</div>
+        </div>
+      )}
+      {err && <p className="text-[12px] text-stone-800 border border-stone-400 rounded-md p-2 mb-3">● Se cortó la subida: <span className="font-mono">{err}</span></p>}
+      <Btn kind="warn" className="w-full py-3" disabled={!filas.length || prog} onClick={subir}>Importar {filas.length || ""}</Btn>
     </Modal>
   );
 }
