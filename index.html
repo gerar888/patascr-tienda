@@ -45,12 +45,13 @@ const firebaseConfig = {
 };
 
 const TIENDA = "patascr"; // si algún día abrís otra sucursal, cambiás esto
+const BASE_DATOS = "default"; // nombre de la base en Firestore (el del desplegable junto a "Database")
 
 const app = initializeApp(firebaseConfig);
 const db = initializeFirestore(app, {
   localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
   experimentalForceLongPolling: true
-});
+}, BASE_DATOS);
 const auth = getAuth(app);
 
 const ruta = (col) => collection(db, "tiendas", TIENDA, col);
@@ -61,7 +62,7 @@ window.FB = {
     const u = auth.currentUser;
     let token = null;
     try { token = u ? await u.getIdToken() : null; } catch (e) {}
-    const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/(default)/documents/tiendas?pageSize=1`;
+    const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${BASE_DATOS}/documents/tiendas?pageSize=1`;
     try {
       const r = await fetch(url, { headers: token ? { Authorization: "Bearer " + token } : {} });
       const cuerpo = await r.text();
