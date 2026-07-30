@@ -118,27 +118,61 @@ const margen = (precio, costo) => (precio > 0 ? ((precio - costo) / precio) * 10
 const partes = (t) => (t || "").split(/\s*\+\s*/).map((s) => s.trim()).filter(Boolean);
 const norm = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
 
-function matchProducto(txt, precios) {
-  const t = norm(txt); if (!t) return null;
-  let best = null;
-  precios.forEach((p) => {
-    const n = norm(p.nombre); if (!n) return;
-    let score = 0;
-    if (t.includes(n) || n.includes(t)) score = Math.min(n.length, t.length);
-    else {
-      const pal = n.split(" ").filter((w) => w.length > 2);
-      const hits = pal.filter((w) => t.includes(w)).length;
-      if (hits >= 2 || (pal.length === 1 && hits === 1)) score = hits * 3;
-    }
-    if (score > 0 && (!best || score > best.score)) best = { p, score };
-  });
-  return best ? best.p : null;
+/* similitud entre dos textos: 0 a 1, por palabras compartidas */
+function similitud(a, b) {
+  const pa = norm(a).split(" ").filter((w) => w.length > 2);
+  const pb = norm(b).split(" ").filter((w) => w.length > 2);
+  if (!pa.length || !pb.length) return 0;
+  const comunes = pa.filter((w) => pb.some((x) => x.startsWith(w) || w.startsWith(x))).length;
+  return comunes / Math.max(pa.length, pb.length);
 }
-const ratioCosto = (p) => {
-  if (p.precioKilo > 0 && p.peso > 0) return p.costo / p.peso / p.precioKilo;
-  if (p.precioSaco > 0) return p.costo / p.precioSaco;
-  return null;
-};
+
+/* candidatos ordenados por parecido, para la pantalla de enlaces */
+function candidatos(txt, precios, n = 3) {
+  return precios
+    .map((p) => ({ p, score: similitud(txt, p.nombre) }))
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, n);
+}
+
+/* identifica el producto: primero por enlace guardado, después por parecido */
+function identificar(txt, precios, enlaces) {
+  const k = norm(txt);
+  const en = enlaces.find((e) => e.id === k || norm(e.texto || "") === k);
+  if (en) {
+    if (en.ignorar) return { ignorado: true };
+    const p = precios.find((x) => x.id === en.productoId);
+    if (p) return { p, seguro: true };
+  }
+  const c = candidatos(txt, precios, 1)[0];
+  if (c && c.score >= 0.6) return { p: c.p, seguro: false };
+  return {};
+}
+
+/* deduce si el monto corresponde a saco completo o a granel, y calcula el costo */
+function costoDeVenta(p, monto) {
+  if (!p || monto <= 0) return null;
+  const costoKilo = p.peso > 0 ? p.costo / p.peso : 0;
+
+  const opciones = [];
+  if (p.precioSaco > 0) {
+    const n = monto / p.precioSaco;
+    const redondo = Math.round(n);
+    if (redondo >= 1) opciones.push({ tipo: "saco", cantidad: redondo, costo: redondo * p.costo, error: Math.abs(n - redondo) / n });
+  }
+  if (p.precioKilo > 0 && costoKilo > 0) {
+    const kilos = monto / p.precioKilo;
+    opciones.push({ tipo: "granel", cantidad: kilos, costo: kilos * costoKilo, error: 0.5 });
+  }
+  if (!opciones.length) return null;
+
+  /* si el monto calza casi exacto con sacos completos, gana el saco */
+  const saco = opciones.find((o) => o.tipo === "saco" && o.error < 0.05);
+  const elegida = saco || opciones.sort((a, b) => a.error - b.error)[0];
+  if (!(elegida.costo > 0) || elegida.costo >= monto * 1.5) return null;
+  return elegida;
+}
 
 /* ================= UI base ================= */
 const Card = ({ children, className = "" }) => <div className={"bg-white border border-stone-300 rounded-lg " + className}>{children}</div>;
@@ -210,6 +244,7 @@ function App() {
   const [gastos] = useColeccion("gastos", sesion);
   const [precios] = useColeccion("precios", sesion);
   const [fijos] = useColeccion("fijos", sesion);
+  const [enlaces] = useColeccion("enlaces", sesion);
   const [cfgArr] = useColeccion("config", sesion);
   const cfg = { ...CFG_DEF, ...(cfgArr[0] || {}) };
 
@@ -237,7 +272,7 @@ function App() {
           <div className="font-mono tabular-nums text-4xl tracking-tight">{C(totalHoy)}</div>
           <div className="text-[11px] text-stone-400 pb-1.5 leading-tight">hoy<br />{nHoy} {nHoy === 1 ? "venta" : "ventas"}</div>
         </div>
-        {gastoHoy > 0 && <div className="mt-1 font-mono tabular-nums text-[12px] text-stone-400">− {C(gastoHoy)} en salidas · queda {C(totalHoy - gastoHoy)}</div>}
+        {gastoHoy > 0 && <div className="mt-1 font-mono tabular-nums text-[12px] text-stone-400">{C(gastoHoy)} pagados hoy en compras y gastos</div>}
       </header>
 
       <main className="px-3 pt-3 max-w-3xl mx-auto">
@@ -261,7 +296,7 @@ function App() {
         {tab === "registrar" && <Registrar ventas={ventas} gastos={gastos} fijos={fijos} guardar={guardar} borrar={borrar} aviso={aviso} usuario={sesion.email} />}
         {tab === "historial" && <Historial ventas={ventas} gastos={gastos} guardar={guardar} borrar={borrar} aviso={aviso} />}
         {tab === "precios" && <Precios precios={precios} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} />}
-        {tab === "reportes" && <Reportes ventas={ventas} gastos={gastos} precios={precios} fijos={fijos} cfg={cfg} guardar={guardar} aviso={aviso} correo={sesion.email} />}
+        {tab === "reportes" && <Reportes ventas={ventas} gastos={gastos} precios={precios} fijos={fijos} enlaces={enlaces} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} correo={sesion.email} />}
       </main>
 
       {toast && <div className="fixed bottom-24 left-1/2 -translate-x-1/2 bg-stone-900 text-white text-sm px-4 py-2 rounded-full z-50 shadow-lg">{toast}</div>}
@@ -919,8 +954,10 @@ function ImportPreciosModal({ onClose, onSave }) {
 }
 
 /* ================= REPORTES ================= */
-function Reportes({ ventas, gastos, precios, fijos, cfg, guardar, aviso, correo }) {
+function Reportes({ ventas, gastos, precios, fijos, enlaces, cfg, guardar, borrar, aviso, correo }) {
   const [ajustes, setAjustes] = useState(false);
+  const [verEnlaces, setVerEnlaces] = useState(false);
+  const [detalle, setDetalle] = useState(false);
   const [mes, setMes] = useState(mesDe(hoyISO()));
 
   const meses = useMemo(()=>[...new Set([...ventas,...gastos].map((v)=>mesDe(v.fecha)))].sort().reverse(), [ventas,gastos]);
@@ -929,26 +966,52 @@ function Reportes({ ventas, gastos, precios, fijos, cfg, guardar, aviso, correo 
   const total = delMes.reduce((a,v)=>a+v.monto,0);
   const salidas = gastosMes.reduce((a,g)=>a+g.monto,0);
   const mercaderia = gastosMes.filter((g)=>g.categoria==="Mercadería").reduce((a,g)=>a+g.monto,0);
+  const fijosPagados = gastosMes.filter((g)=>g.fijoId).reduce((a,g)=>a+g.monto,0);
   const efectivoNeto = delMes.filter((v)=>v.pago==="Efectivo").reduce((a,v)=>a+v.monto,0) - gastosMes.filter((g)=>g.pago==="Efectivo").reduce((a,g)=>a+g.monto,0);
   const ticket = delMes.length ? total/delMes.length : 0;
 
-  const conCosto = useMemo(()=>{
-    let vi=0, ci=0, si=0;
+  /* ---- costo real por venta ---- */
+  const analisis = useMemo(()=>{
+    let ventaId=0, costoId=0, sinId=0;
+    const sinIdentificar = {};
+    const porProducto = {};
     delMes.forEach((v)=>{
       const ps = partes(v.producto), porParte = v.monto/ps.length;
       ps.forEach((txt)=>{
-        const p = matchProducto(txt, precios), r = p ? ratioCosto(p) : null;
-        if (r && r>0 && r<1) { vi += porParte; ci += porParte*r; } else si += porParte;
+        const r = identificar(txt, precios, enlaces);
+        if (r.ignorado) { ventaId += porParte; return; }
+        const c = r.p ? costoDeVenta(r.p, porParte) : null;
+        if (c) {
+          ventaId += porParte; costoId += c.costo;
+          const k = r.p.id;
+          if (!porProducto[k]) porProducto[k] = { nombre: r.p.nombre, venta:0, costo:0, veces:0 };
+          porProducto[k].venta += porParte; porProducto[k].costo += c.costo; porProducto[k].veces++;
+        } else {
+          sinId += porParte;
+          const k = norm(txt);
+          if (!sinIdentificar[k]) sinIdentificar[k] = { texto: txt, veces:0, monto:0 };
+          sinIdentificar[k].veces++; sinIdentificar[k].monto += porParte;
+        }
       });
     });
-    return { vi, ci, si, cobertura: total>0 ? (vi/total)*100 : 0 };
-  }, [delMes, precios]);
-  const margenReal = conCosto.vi>0 ? margen(conCosto.vi, conCosto.ci) : null;
-  const ganancia = total * (1 - cfg.costoPct/100);
+    return {
+      ventaId, costoId, sinId,
+      cobertura: total>0 ? (ventaId/total)*100 : 0,
+      sinLista: Object.values(sinIdentificar).sort((a,b)=>b.monto-a.monto),
+      productos: Object.values(porProducto).map((x)=>({ ...x, gan: x.venta-x.costo, pct: x.venta>0 ? ((x.venta-x.costo)/x.venta)*100 : 0 })).sort((a,b)=>b.gan-a.gan)
+    };
+  }, [delMes, precios, enlaces]);
+
+  /* ganancia: costo real donde se pudo, porcentaje estimado en el resto */
+  const margenId = analisis.ventaId>0 ? margen(analisis.ventaId, analisis.costoId) : null;
+  const gananciaId = analisis.ventaId - analisis.costoId;
+  const gananciaEst = analisis.sinId * (1 - cfg.costoPct/100);
+  const gananciaBruta = gananciaId + gananciaEst;
+  const margenBruto = total>0 ? (gananciaBruta/total)*100 : 0;
+  const gananciaNeta = gananciaBruta - fijosPagados;
 
   const totalFijos = fijos.reduce((a,f)=>a+f.monto,0);
-  const pctMargen = margenReal !== null ? margenReal : 100 - cfg.costoPct;
-  const equilibrio = pctMargen>0 ? totalFijos/(pctMargen/100) : 0;
+  const equilibrio = margenBruto>0 ? totalFijos/(margenBruto/100) : 0;
 
   const [ay, am] = mes.split("-").map(Number);
   const hoy = new Date(), esMesActual = mes === mesDe(hoyISO());
@@ -961,12 +1024,6 @@ function Reportes({ ventas, gastos, precios, fijos, cfg, guardar, aviso, correo 
 
   const porPago = PAGOS.map((p)=>({ p, t: delMes.filter((v)=>v.pago===p).reduce((a,v)=>a+v.monto,0) })).filter((x)=>x.t>0);
   const porCat = CATS.map((c)=>({ c, t: gastosMes.filter((g)=>g.categoria===c).reduce((a,g)=>a+g.monto,0) })).filter((x)=>x.t>0).sort((a,b)=>b.t-a.t);
-
-  const porProd = useMemo(()=>{
-    const m = {};
-    delMes.forEach((v)=>{ const ps = partes(v.producto); ps.forEach((p)=>{ const k = norm(p); if(!m[k]) m[k]={nombre:p,veces:0,monto:0}; m[k].veces++; m[k].monto += v.monto/ps.length; }); });
-    return Object.values(m).sort((a,b)=>b.monto-a.monto);
-  }, [delMes]);
 
   const porCli = useMemo(()=>{
     const m = {};
@@ -990,64 +1047,65 @@ function Reportes({ ventas, gastos, precios, fijos, cfg, guardar, aviso, correo 
     aviso("CSV descargado");
   };
 
+  const nomMes = new Date(ay, am-1, 1).toLocaleDateString("es-CR", { month: "long", year: "numeric" });
+
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {meses.length>1 && (
         <div className="flex gap-2 overflow-x-auto pb-1">
           {meses.map((m)=>(<button key={m} onClick={()=>setMes(m)} className={"px-3 py-1.5 rounded-full border text-xs whitespace-nowrap font-mono " + (mes===m ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{m}</button>))}
         </div>
       )}
 
+      {/* ---------- 1. LO ESENCIAL ---------- */}
       <Card className="p-4">
-        <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-3">Resumen del mes</div>
-        <div className="grid grid-cols-2 gap-y-3">
-          <B k="Ventas" v={C(total)} grande />
-          <B k="Ganancia estimada" v={C(ganancia)} sub={`asumiendo ${cfg.costoPct}% de costo`} grande />
-          <B k="Ventas registradas" v={String(delMes.length)} />
-          <B k="Tiquete promedio" v={C(ticket)} />
-        </div>
-      </Card>
+        <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-3">{titulo(nomMes)}</div>
 
-      {precios.length>0 && (
-        <Card className="p-4">
-          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Margen con costos reales</div>
-          {conCosto.vi===0 ? <p className="text-sm text-stone-600">Ninguna venta del mes se pudo cruzar con la tabla de precios.</p> : (
-            <div className="space-y-1">
-              <Linea label="Ventas identificadas" val={`${C(conCosto.vi)} · ${conCosto.cobertura.toFixed(0)}%`} />
-              <Linea label="Costo de esas ventas" val={C(conCosto.ci)} />
-              <Linea label="Ganancia identificada" val={`${C(conCosto.vi-conCosto.ci)} · ${margenReal.toFixed(1)}%`} fuerte />
-              {conCosto.si>0 && <p className="text-[11px] text-stone-500 pt-2">Quedaron {C(conCosto.si)} sin identificar; para esos se usa el {cfg.costoPct}% estimado.</p>}
-            </div>
-          )}
-        </Card>
-      )}
-
-      <Card className="p-4">
-        <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Entró y salió</div>
-        <div className="space-y-1">
-          <Linea label="Entró por ventas" val={C(total)} />
-          <Linea label="Salió en compras y gastos" val={"− " + C(salidas)} />
-          <div className="pt-2 mt-1 border-t border-stone-200"><Linea label={total-salidas>=0 ? "Quedó" : "Faltó"} val={C(Math.abs(total-salidas))} fuerte /></div>
+        <div className="mb-4">
+          <div className="text-[11px] text-stone-500">Vendimos</div>
+          <div className="font-mono tabular-nums text-3xl font-semibold">{C(total)}</div>
+          <div className="text-[12px] text-stone-500">{delMes.length} ventas · {C(ticket)} cada una en promedio</div>
         </div>
-        <div className="mt-3 pt-3 border-t border-stone-200 space-y-1">
-          <Linea label="Efectivo neto en caja" val={C(efectivoNeto)} />
-          <Linea label="Compra de mercadería" val={C(mercaderia)} />
-        </div>
-        <p className="text-[11px] text-stone-500 mt-3 leading-relaxed">Esto es plata que entró y salió, no margen: si compran de más un mes, ese mes se ve peor y el siguiente mejor.</p>
-      </Card>
 
-      {totalFijos>0 && (
-        <Card className="p-4">
-          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Punto de equilibrio</div>
-          <div className="space-y-1">
-            <Linea label="Gastos fijos del mes" val={C(totalFijos)} />
-            <Linea label="Margen usado" val={pctMargen.toFixed(1)+"%"} />
-            <Linea label="Hay que vender" val={C(equilibrio)} fuerte />
-            <Linea label={total>=equilibrio ? "Ya se cubrió, sobra" : "Falta vender"} val={C(Math.abs(equilibrio-total))} />
+        <div className="border-t border-stone-200 pt-3 mb-4">
+          <div className="text-[11px] text-stone-500">De eso, la ganancia del producto fue</div>
+          <div className="font-mono tabular-nums text-2xl font-semibold">{C(gananciaBruta)}</div>
+          <div className="text-[12px] text-stone-500">{margenBruto.toFixed(0)}% de lo vendido · lo demás es lo que costó la comida</div>
+        </div>
+
+        <div className="border-t border-stone-200 pt-3">
+          <div className="text-[11px] text-stone-500">Menos los gastos fijos que ya se pagaron ({C(fijosPagados)}), quedan</div>
+          <div className="font-mono tabular-nums text-2xl font-semibold">{C(gananciaNeta)}</div>
+          <div className="text-[12px] text-stone-500">
+            {gananciaNeta >= 0 ? "Esto es lo que el negocio generó de verdad este mes." : "El mes va en pérdida: la ganancia no alcanzó para cubrir los fijos."}
           </div>
-        </Card>
-      )}
+        </div>
+      </Card>
 
+      {/* ---------- 2. CONFIANZA DEL CÁLCULO ---------- */}
+      <Card className="p-4">
+        <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Qué tan exacta es esa ganancia</div>
+        <div className="space-y-1">
+          <Linea label="Con costo real del producto" val={`${C(analisis.ventaId)} · ${analisis.cobertura.toFixed(0)}% de las ventas`} />
+          <Linea label="Margen real de esas ventas" val={margenId===null ? "—" : margenId.toFixed(1)+"%"} />
+          <Linea label={`Estimado al ${100-cfg.costoPct}% de margen`} val={C(analisis.sinId)} />
+        </div>
+        <div className="h-2 bg-stone-200 rounded-full overflow-hidden mt-3 border border-stone-300">
+          <div className="h-full bg-stone-900" style={{ width: Math.min(100, analisis.cobertura)+"%" }} />
+        </div>
+        <p className="text-[12px] text-stone-600 mt-3 leading-relaxed">
+          {analisis.cobertura >= 90
+            ? "★ Casi todas las ventas están cruzadas con la tabla de costos, así que la ganancia de arriba es confiable."
+            : `◐ Quedan ${analisis.sinLista.length} nombres de producto que no calzan con la tabla de precios. Enlazalos y el número de arriba deja de ser una estimación.`}
+        </p>
+        {analisis.sinLista.length > 0 && (
+          <Btn kind="warn" className="w-full mt-3" onClick={()=>setVerEnlaces(true)}>
+            Enlazar {analisis.sinLista.length} {analisis.sinLista.length===1 ? "producto" : "productos"}
+          </Btn>
+        )}
+      </Card>
+
+      {/* ---------- 3. META ---------- */}
       <Card className="p-4">
         <div className="flex justify-between items-baseline mb-2">
           <span className="text-[11px] uppercase tracking-[0.15em] text-stone-500">Meta del mes</span>
@@ -1057,64 +1115,109 @@ function Reportes({ ventas, gastos, precios, fijos, cfg, guardar, aviso, correo 
         <div className="mt-2 font-mono tabular-nums text-sm">{avance.toFixed(0)}% de la meta</div>
         <div className="mt-3 pt-3 border-t border-stone-200 space-y-1">
           <Linea label={`Promedio por día${cfg.excluirDomingos ? " (sin domingos)" : ""}`} val={C(promDia)} />
-          <Linea label="Proyección al cierre" val={C(proy)} fuerte />
+          <Linea label="Si sigue así, cierra en" val={C(proy)} fuerte />
           {esMesActual && <Linea label="Días de venta que faltan" val={String(habTotal-habT)} />}
         </div>
+        {totalFijos>0 && (
+          <p className="text-[12px] text-stone-600 mt-3 pt-3 border-t border-stone-200 leading-relaxed">
+            Para cubrir los {C(totalFijos)} de gastos fijos con un margen del {margenBruto.toFixed(0)}%, hay que vender <span className="font-medium">{C(equilibrio)}</span> al mes.
+            {total >= equilibrio ? ` Ya se pasó por ${C(total-equilibrio)}.` : ` Faltan ${C(equilibrio-total)}.`}
+          </p>
+        )}
       </Card>
 
-      {porPago.length>0 && (
+      {/* ---------- 4. GANANCIA POR PRODUCTO ---------- */}
+      {analisis.productos.length>0 && (
         <Card className="p-4">
-          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Cómo pagaron</div>
-          {porPago.map((x)=><Linea key={x.p} label={x.p} val={`${C(x.t)} · ${((x.t/total)*100).toFixed(0)}%`} />)}
+          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-1">Cuánto deja cada producto</div>
+          <p className="text-[11px] text-stone-500 mb-3">Solo los que están enlazados a la tabla de costos. Ordenados por ganancia.</p>
+          {analisis.productos.map((x,i)=>{
+            const ix = ind(x.pct, cfg.margenGranel);
+            return (
+              <div key={i} className="py-2 border-b border-stone-100 last:border-0">
+                <div className="flex justify-between text-sm">
+                  <span className="font-medium truncate mr-2"><span className="text-stone-500 mr-1.5" title={ix.t}>{ix.s}</span>{x.nombre}</span>
+                  <span className="font-mono tabular-nums font-semibold shrink-0">{C(x.gan)}</span>
+                </div>
+                <div className="flex justify-between text-[11px] text-stone-500 font-mono tabular-nums mt-0.5">
+                  <span>{x.veces}× · vendido {C(x.venta)} · costó {C(x.costo)}</span>
+                  <span>{x.pct.toFixed(0)}%</span>
+                </div>
+              </div>
+            );
+          })}
+          <p className="text-[11px] text-stone-500 mt-2">★ sobre la meta de {cfg.margenGranel}% · ○ en meta · ◐ apenas debajo · ● margen muy bajo</p>
         </Card>
       )}
 
-      {porCat.length>0 && (
-        <Card className="p-4">
-          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">En qué se fue la plata</div>
-          {porCat.map((x)=><Linea key={x.c} label={x.c} val={`${C(x.t)} · ${((x.t/salidas)*100).toFixed(0)}%`} />)}
-        </Card>
-      )}
-
-      {porDia.length>0 && (
-        <Card className="p-4">
-          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Venta por día</div>
-          {porDia.map((d)=>(
-            <div key={d.f} className="flex items-center gap-2 py-1">
-              <span className="font-mono text-[11px] text-stone-500 w-14 shrink-0">{fmtFecha(d.f).slice(0,5)}</span>
-              <div className="flex-1 h-2.5 bg-stone-200 rounded-sm overflow-hidden"><div className="h-full bg-stone-800" style={{ width: d.pct+"%" }} /></div>
-              <span className="font-mono tabular-nums text-[12px] w-20 text-right">{C(d.t)}</span>
-            </div>
-          ))}
-        </Card>
-      )}
-
+      {/* ---------- 5. CAJA ---------- */}
       <Card className="p-4">
-        <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-1">Qué se vende más</div>
-        <p className="text-[11px] text-stone-500 mb-2">Cuando una venta lleva varios productos, el monto se reparte.</p>
-        {porProd.slice(0,20).map((x,i)=>(
-          <div key={i} className="flex justify-between py-1.5 border-b border-stone-100 last:border-0">
-            <span className="text-sm truncate mr-2">{x.nombre}</span>
-            <span className="font-mono tabular-nums text-[12px] shrink-0">{x.veces}× · {C(x.monto)}</span>
-          </div>
-        ))}
+        <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Movimiento de plata</div>
+        <div className="space-y-1">
+          <Linea label="Entró por ventas" val={C(total)} />
+          <Linea label="Salió en compras y gastos" val={"− " + C(salidas)} />
+          <div className="pt-2 mt-1 border-t border-stone-200"><Linea label={total-salidas>=0 ? "Diferencia a favor" : "Diferencia en contra"} val={C(Math.abs(total-salidas))} fuerte /></div>
+        </div>
+        <div className="mt-3 pt-3 border-t border-stone-200 space-y-1">
+          <Linea label="Efectivo que debería estar en caja" val={C(efectivoNeto)} />
+          <Linea label="Se invirtió en mercadería" val={C(mercaderia)} />
+        </div>
+        <p className="text-[12px] text-stone-600 mt-3 leading-relaxed">
+          Esta tarjeta es plata que entró y salió del bolsillo, no ganancia. Un mes que comprás mucha mercadería se ve mal aunque el negocio esté bien, porque esa comida se vende en los meses siguientes. Para saber si ganaron, mirá la primera tarjeta.
+        </p>
       </Card>
 
-      {porCli.length>0 && (
-        <Card className="p-4">
-          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Clientes del mes</div>
-          {porCli.slice(0,15).map((x,i)=>(
-            <div key={i} className="flex justify-between py-1.5 border-b border-stone-100 last:border-0">
-              <span className="text-sm">{x.veces>1 && <span className="text-stone-500 mr-1.5">★</span>}{x.nombre}</span>
-              <span className="font-mono tabular-nums text-[12px]">{x.veces}× · {C(x.monto)}</span>
-            </div>
-          ))}
-          <p className="text-[11px] text-stone-500 mt-2">★ compró más de una vez este mes.</p>
-        </Card>
+      <button onClick={()=>setDetalle(!detalle)} className="w-full text-center text-[12px] text-stone-600 underline py-1">
+        {detalle ? "Ocultar el detalle" : "Ver más detalle (pagos, días, clientes)"}
+      </button>
+
+      {detalle && (
+        <>
+          {porPago.length>0 && (
+            <Card className="p-4">
+              <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Cómo pagaron</div>
+              {porPago.map((x)=><Linea key={x.p} label={x.p} val={`${C(x.t)} · ${((x.t/total)*100).toFixed(0)}%`} />)}
+            </Card>
+          )}
+
+          {porCat.length>0 && (
+            <Card className="p-4">
+              <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">En qué se fue la plata</div>
+              {porCat.map((x)=><Linea key={x.c} label={x.c} val={`${C(x.t)} · ${((x.t/salidas)*100).toFixed(0)}%`} />)}
+            </Card>
+          )}
+
+          {porDia.length>0 && (
+            <Card className="p-4">
+              <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Venta por día</div>
+              {porDia.map((d)=>(
+                <div key={d.f} className="flex items-center gap-2 py-1">
+                  <span className="font-mono text-[11px] text-stone-500 w-14 shrink-0">{fmtFecha(d.f).slice(0,5)}</span>
+                  <div className="flex-1 h-2.5 bg-stone-200 rounded-sm overflow-hidden"><div className="h-full bg-stone-800" style={{ width: d.pct+"%" }} /></div>
+                  <span className="font-mono tabular-nums text-[12px] w-20 text-right">{C(d.t)}</span>
+                </div>
+              ))}
+            </Card>
+          )}
+
+          {porCli.length>0 && (
+            <Card className="p-4">
+              <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Clientes del mes</div>
+              {porCli.slice(0,15).map((x,i)=>(
+                <div key={i} className="flex justify-between py-1.5 border-b border-stone-100 last:border-0">
+                  <span className="text-sm">{x.veces>1 && <span className="text-stone-500 mr-1.5">★</span>}{x.nombre}</span>
+                  <span className="font-mono tabular-nums text-[12px]">{x.veces}× · {C(x.monto)}</span>
+                </div>
+              ))}
+              <p className="text-[11px] text-stone-500 mt-2">★ compró más de una vez este mes.</p>
+            </Card>
+          )}
+        </>
       )}
 
       <div className="flex gap-2">
         <Btn kind="ghost" className="flex-1" onClick={exportar}>Descargar CSV</Btn>
+        <Btn kind="ghost" className="flex-1" onClick={()=>setVerEnlaces(true)}>Enlaces</Btn>
         <Btn kind="ghost" className="flex-1" onClick={()=>setAjustes(true)}>Ajustes</Btn>
       </div>
 
@@ -1124,7 +1227,97 @@ function Reportes({ ventas, gastos, precios, fijos, cfg, guardar, aviso, correo 
       </div>
 
       {ajustes && <AjustesModal cfg={cfg} guardar={guardar} onClose={()=>setAjustes(false)} />}
+      {verEnlaces && (
+        <EnlacesModal
+          sinLista={analisis.sinLista}
+          precios={precios}
+          enlaces={enlaces}
+          guardar={guardar}
+          borrar={borrar}
+          onClose={()=>setVerEnlaces(false)}
+          aviso={aviso}
+        />
+      )}
     </div>
+  );
+}
+
+/* ================= ENLACES ================= */
+function EnlacesModal({ sinLista, precios, enlaces, guardar, borrar, onClose, aviso }) {
+  const [tab, setTab] = useState("pendientes");
+
+  const enlazar = async (texto, productoId) => {
+    await guardar("enlaces", { id: norm(texto), texto, productoId, ignorar: false });
+    aviso("Enlazado");
+  };
+  const ignorar = async (texto) => {
+    await guardar("enlaces", { id: norm(texto), texto, productoId: "", ignorar: true });
+    aviso("Marcado como sin costo");
+  };
+
+  return (
+    <Modal title="Enlazar productos" onClose={onClose}>
+      <div className="grid grid-cols-2 gap-1.5 mb-3">
+        {[["pendientes", `Pendientes (${sinLista.length})`],["hechos", `Enlazados (${enlaces.length})`]].map(([id,l])=>(
+          <button key={id} onClick={()=>setTab(id)} className={"py-2 rounded-md border text-[12px] " + (tab===id ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{l}</button>
+        ))}
+      </div>
+
+      {tab === "pendientes" ? (
+        <>
+          <p className="text-[13px] text-stone-600 mb-3 leading-relaxed">
+            Estos nombres aparecen en las ventas pero no calzan con ningún artículo de Precios. Elegí a cuál corresponde cada uno y queda aprendido para siempre.
+          </p>
+          {sinLista.length === 0 && <p className="text-sm text-stone-500 text-center py-6">Todo está enlazado. ★</p>}
+          {sinLista.map((s)=>{
+            const cands = candidatos(s.texto, precios, 3);
+            return (
+              <div key={s.texto} className="border border-stone-300 rounded-lg p-3 mb-2">
+                <div className="flex justify-between items-baseline">
+                  <span className="text-sm font-medium">{s.texto}</span>
+                  <span className="font-mono tabular-nums text-[11px] text-stone-500">{s.veces}× · {C(s.monto)}</span>
+                </div>
+                <div className="mt-2 space-y-1">
+                  {cands.map(({p, score})=>(
+                    <button key={p.id} onClick={()=>enlazar(s.texto, p.id)} className="w-full text-left px-2 py-1.5 rounded-md border border-stone-300 bg-stone-50 active:bg-stone-200 flex justify-between items-center">
+                      <span className="text-[13px] truncate mr-2">{p.nombre}</span>
+                      <span className="font-mono text-[10px] text-stone-500 shrink-0">{score>=0.8 ? "★" : score>=0.5 ? "○" : "◐"} {(score*100).toFixed(0)}%</span>
+                    </button>
+                  ))}
+                  <select
+                    onChange={(e)=>e.target.value && enlazar(s.texto, e.target.value)}
+                    defaultValue=""
+                    className="w-full px-2 py-1.5 border border-stone-300 rounded-md bg-white text-[13px]"
+                  >
+                    <option value="">Buscar en toda la lista…</option>
+                    {[...precios].sort((a,b)=>a.nombre.localeCompare(b.nombre)).map((p)=><option key={p.id} value={p.id}>{p.nombre}</option>)}
+                  </select>
+                  <button onClick={()=>ignorar(s.texto)} className="w-full text-[11px] text-stone-500 underline py-1">
+                    No es alimento con costo (helado, servicio, otro)
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </>
+      ) : (
+        <>
+          {enlaces.length === 0 && <p className="text-sm text-stone-500 text-center py-6">Todavía no hay enlaces guardados.</p>}
+          {enlaces.map((e)=>{
+            const p = precios.find((x)=>x.id===e.productoId);
+            return (
+              <div key={e.id} className="flex justify-between items-center py-2 border-b border-stone-100">
+                <div className="min-w-0">
+                  <div className="text-sm truncate">{e.texto}</div>
+                  <div className="text-[11px] text-stone-500 truncate">{e.ignorar ? "Sin costo asignado" : (p ? "→ " + p.nombre : "→ artículo borrado")}</div>
+                </div>
+                <button onClick={()=>borrar("enlaces", e.id)} className="text-stone-400 text-lg ml-2">×</button>
+              </div>
+            );
+          })}
+        </>
+      )}
+    </Modal>
   );
 }
 
