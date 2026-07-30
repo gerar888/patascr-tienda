@@ -114,7 +114,7 @@ const num = (v) => parseFloat(String(v).replace(/[^\d.]/g, "")) || 0;
 
 const CATS = ["Mercadería", "Empaque", "Alquiler", "Servicios", "Transporte", "Marketing", "Impuestos", "Otro"];
 const PAGOS = ["Efectivo", "SINPE", "Tarjeta", "Otro"];
-const CFG_DEF = { id: "general", meta: 140000, costoPct: 80, excluirDomingos: true, margenGranel: 20, margenSaco: 15 };
+const CFG_DEF = { id: "general", meta: 140000, costoPct: 80, excluirDomingos: true, margenGranel: 20, margenSaco: 15, fondoCaja: 20000 };
 
 const margen = (precio, costo) => (precio > 0 ? ((precio - costo) / precio) * 100 : null);
 const partes = (t) => (t || "").split(/\s*\+\s*/).map((s) => s.trim()).filter(Boolean);
@@ -296,7 +296,7 @@ function App() {
             )}
           </div>
         )}
-        {tab === "registrar" && <Registrar ventas={ventas} gastos={gastos} fijos={fijos} precios={precios} enlaces={enlaces} cierres={cierres} guardar={guardar} borrar={borrar} aviso={aviso} usuario={sesion.email} />}
+        {tab === "registrar" && <Registrar ventas={ventas} gastos={gastos} fijos={fijos} precios={precios} enlaces={enlaces} cierres={cierres} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={sesion.email} />}
         {tab === "historial" && <Historial ventas={ventas} gastos={gastos} guardar={guardar} borrar={borrar} aviso={aviso} />}
         {tab === "precios" && <Precios precios={precios} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} />}
         {tab === "reportes" && <Reportes ventas={ventas} gastos={gastos} precios={precios} fijos={fijos} enlaces={enlaces} cierres={cierres} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} correo={sesion.email} />}
@@ -393,7 +393,7 @@ function Login({ aviso, toast }) {
 }
 
 /* ================= REGISTRAR ================= */
-function Registrar({ ventas, gastos, fijos, precios, enlaces, cierres, guardar, borrar, aviso, usuario }) {
+function Registrar({ ventas, gastos, fijos, precios, enlaces, cierres, cfg, guardar, borrar, aviso, usuario }) {
   const [modo, setModo] = useState("venta");
   return (
     <div>
@@ -403,13 +403,13 @@ function Registrar({ ventas, gastos, fijos, precios, enlaces, cierres, guardar, 
         ))}
       </div>
       {modo === "venta"
-        ? <VentaForm ventas={ventas} gastos={gastos} precios={precios} enlaces={enlaces} cierres={cierres} guardar={guardar} aviso={aviso} usuario={usuario} />
+        ? <VentaForm ventas={ventas} gastos={gastos} precios={precios} enlaces={enlaces} cierres={cierres} cfg={cfg} guardar={guardar} aviso={aviso} usuario={usuario} />
         : <GastoForm gastos={gastos} fijos={fijos} guardar={guardar} borrar={borrar} aviso={aviso} usuario={usuario} />}
     </div>
   );
 }
 
-function VentaForm({ ventas, gastos, precios, enlaces, cierres, guardar, aviso, usuario }) {
+function VentaForm({ ventas, gastos, precios, enlaces, cierres, cfg, guardar, aviso, usuario }) {
   const [fecha, setFecha] = useState(hoyISO());
   const [prod, setProd] = useState("");
   const [monto, setMonto] = useState("");
@@ -519,6 +519,7 @@ function VentaForm({ ventas, gastos, precios, enlaces, cierres, guardar, aviso, 
           ventas={ventas}
           gastos={gastos}
           cierres={cierres}
+          cfg={cfg}
           guardar={guardar}
           usuario={usuario}
           aviso={aviso}
@@ -586,15 +587,17 @@ function ImportarVentasModal({ onClose, onSave }) {
 }
 
 /* ================= CIERRE DE CAJA ================= */
-function CierreModal({ fecha, ventas, gastos, cierres, guardar, usuario, aviso, onClose }) {
+function CierreModal({ fecha, ventas, gastos, cierres, cfg, guardar, usuario, aviso, onClose }) {
   const [contado, setContado] = useState("");
   const [nota, setNota] = useState("");
 
+  const fondo = cfg.fondoCaja || 0;
   const efeVentas = ventas.filter((v)=>v.fecha===fecha && v.pago==="Efectivo").reduce((a,v)=>a+v.monto,0);
   const efeGastos = gastos.filter((g)=>g.fecha===fecha && g.pago==="Efectivo").reduce((a,g)=>a+g.monto,0);
-  const esperado = efeVentas - efeGastos;
+  const esperado = fondo + efeVentas - efeGastos;
   const real = num(contado);
   const dif = contado === "" ? null : real - esperado;
+  const retiro = contado === "" ? null : real - fondo;
   const yaCerrado = cierres.find((c)=>c.fecha===fecha);
 
   const previos = [...cierres].sort((a,b)=>(a.fecha<b.fecha?1:-1)).slice(0,7);
@@ -602,8 +605,8 @@ function CierreModal({ fecha, ventas, gastos, cierres, guardar, usuario, aviso, 
 
   const guardarCierre = async () => {
     await guardar("cierres", {
-      id: fecha, fecha, esperado, contado: real, diferencia: real - esperado,
-      nota: nota.trim(), usuario, creado: Date.now()
+      id: fecha, fecha, fondo, esperado, contado: real, diferencia: real - esperado,
+      retiro: Math.max(0, real - fondo), nota: nota.trim(), usuario, creado: Date.now()
     });
     aviso("Caja cerrada");
     onClose();
@@ -612,7 +615,8 @@ function CierreModal({ fecha, ventas, gastos, cierres, guardar, usuario, aviso, 
   return (
     <Modal title={"Cerrar caja · " + fmtFecha(fecha)} onClose={onClose}>
       <div className="bg-stone-100 rounded-md p-3 mb-3 space-y-1">
-        <Linea label="Ventas en efectivo" val={C(efeVentas)} />
+        <Linea label="Fondo con el que se abrió" val={C(fondo)} />
+        <Linea label="Ventas en efectivo" val={"+ " + C(efeVentas)} />
         <Linea label="Pagos en efectivo" val={"− " + C(efeGastos)} />
         <div className="pt-2 mt-1 border-t border-stone-300">
           <Linea label="Debería haber en caja" val={C(esperado)} fuerte />
@@ -640,6 +644,17 @@ function CierreModal({ fecha, ventas, gastos, cierres, guardar, usuario, aviso, 
             </p>
           )}
         </div>
+      )}
+
+      {retiro !== null && retiro > 0 && (
+        <div className="bg-stone-100 rounded-md p-3 mb-3">
+          <Linea label={`Sacá esto y dejá los ${C(fondo)} de fondo`} val={C(retiro)} fuerte />
+        </div>
+      )}
+      {retiro !== null && retiro < 0 && (
+        <p className="text-[12px] text-stone-700 border border-stone-400 rounded-md p-2 mb-3">
+          ● Hay menos de los {C(fondo)} del fondo. Habrá que reponer {C(Math.abs(retiro))} antes de abrir mañana.
+        </p>
       )}
 
       <div className="mb-4">
@@ -1311,7 +1326,7 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, cfg, guard
           <div className="pt-2 mt-1 border-t border-stone-200"><Linea label={total-salidas>=0 ? "Diferencia a favor" : "Diferencia en contra"} val={C(Math.abs(total-salidas))} fuerte /></div>
         </div>
         <div className="mt-3 pt-3 border-t border-stone-200 space-y-1">
-          <Linea label="Efectivo que debería estar en caja" val={C(efectivoNeto)} />
+          <Linea label="Efectivo generado en el mes" val={C(efectivoNeto)} />
           <Linea label="Se invirtió en mercadería" val={C(mercaderia)} />
         </div>
         <p className="text-[12px] text-stone-600 mt-3 leading-relaxed">
@@ -1537,6 +1552,11 @@ function AjustesModal({ cfg, guardar, onClose }) {
         <Lbl>Costo del producto (%)</Lbl>
         <Inp inputMode="decimal" value={f.costoPct} onChange={(e)=>setF({...f, costoPct:num(e.target.value)})} className="font-mono" />
         <p className="text-[11px] text-stone-500 mt-1">Solo se usa para las ventas que no calzan con la tabla de precios.</p>
+      </div>
+      <div className="mb-3">
+        <Lbl>Fondo fijo de la caja</Lbl>
+        <Inp inputMode="decimal" value={f.fondoCaja} onChange={(e)=>setF({...f, fondoCaja:num(e.target.value)})} className="font-mono" />
+        <p className="text-[11px] text-stone-500 mt-1">La plata que siempre queda para dar vuelto. Se usa al cerrar caja.</p>
       </div>
       <div className="grid grid-cols-2 gap-3 mb-3">
         <div><Lbl>Margen meta granel (%)</Lbl><Inp inputMode="decimal" value={f.margenGranel} onChange={(e)=>setF({...f, margenGranel:num(e.target.value)})} className="font-mono" /></div>
