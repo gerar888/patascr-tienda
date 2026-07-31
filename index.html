@@ -114,7 +114,7 @@ const num = (v) => parseFloat(String(v).replace(/[^\d.]/g, "")) || 0;
 
 const CATS = ["Mercadería", "Empaque", "Alquiler", "Servicios", "Transporte", "Marketing", "Impuestos", "Otro"];
 const PAGOS = ["Efectivo", "SINPE", "Tarjeta", "Otro"];
-const CFG_DEF = { id: "general", meta: 140000, costoPct: 80, excluirDomingos: true, margenGranel: 20, margenSaco: 15, fondoCaja: 20000 };
+const CFG_DEF = { id: "general", meta: 140000, costoPct: 80, excluirDomingos: true, margenGranel: 20, margenSaco: 15, fondoCaja: 20000, saldoBanco: 0 };
 
 const margen = (precio, costo) => (precio > 0 ? ((precio - costo) / precio) * 100 : null);
 const partes = (t) => (t || "").split(/\s*\+\s*/).map((s) => s.trim()).filter(Boolean);
@@ -248,6 +248,7 @@ function App() {
   const [fijos] = useColeccion("fijos", sesion);
   const [enlaces] = useColeccion("enlaces", sesion);
   const [cierres] = useColeccion("cierres", sesion);
+  const [movs] = useColeccion("movimientos", sesion);
   const [cfgArr] = useColeccion("config", sesion);
   const cfg = { ...CFG_DEF, ...(cfgArr[0] || {}) };
 
@@ -298,15 +299,16 @@ function App() {
         )}
         {tab === "registrar" && <Registrar ventas={ventas} gastos={gastos} fijos={fijos} precios={precios} enlaces={enlaces} cierres={cierres} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={sesion.email} />}
         {tab === "historial" && <Historial ventas={ventas} gastos={gastos} guardar={guardar} borrar={borrar} aviso={aviso} />}
+        {tab === "dinero" && <Dinero ventas={ventas} gastos={gastos} cierres={cierres} movs={movs} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={sesion.email} />}
         {tab === "precios" && <Precios precios={precios} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} />}
         {tab === "reportes" && <Reportes ventas={ventas} gastos={gastos} precios={precios} fijos={fijos} enlaces={enlaces} cierres={cierres} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} correo={sesion.email} />}
       </main>
 
       {toast && <div className="fixed bottom-24 left-1/2 -translate-x-1/2 bg-stone-900 text-white text-sm px-4 py-2 rounded-full z-50 shadow-lg">{toast}</div>}
 
-      <nav className="fixed bottom-0 inset-x-0 bg-white border-t border-stone-300 grid grid-cols-4 z-40 pb-[env(safe-area-inset-bottom)]">
-        {[["registrar","Registrar"],["historial","Historial"],["precios","Precios"],["reportes","Reportes"]].map(([id,l]) => (
-          <button key={id} onClick={() => setTab(id)} className={"py-3 text-[12px] font-medium border-t-2 " + (tab === id ? "border-amber-500 text-stone-900" : "border-transparent text-stone-500")}>{l}</button>
+      <nav className="fixed bottom-0 inset-x-0 bg-white border-t border-stone-300 grid grid-cols-5 z-40 pb-[env(safe-area-inset-bottom)]">
+        {[["registrar","Registrar"],["historial","Historial"],["dinero","Dinero"],["precios","Precios"],["reportes","Reportes"]].map(([id,l]) => (
+          <button key={id} onClick={() => setTab(id)} className={"py-3 text-[11px] font-medium border-t-2 " + (tab === id ? "border-amber-500 text-stone-900" : "border-transparent text-stone-500")}>{l}</button>
         ))}
       </nav>
     </div>
@@ -649,6 +651,7 @@ function CierreModal({ fecha, ventas, gastos, cierres, cfg, guardar, usuario, av
       {retiro !== null && retiro > 0 && (
         <div className="bg-stone-100 rounded-md p-3 mb-3">
           <Linea label={`Sacá esto y dejá los ${C(fondo)} de fondo`} val={C(retiro)} fuerte />
+          <p className="text-[11px] text-stone-500 mt-1">Queda en "por depositar" hasta que lo registrés en Dinero.</p>
         </div>
       )}
       {retiro !== null && retiro < 0 && (
@@ -929,6 +932,232 @@ function EditarGastoModal({ g, onClose, onSave, onDelete }) {
         <Btn kind="warn" className="flex-1 py-3" onClick={()=>onSave({ ...f, monto: num(f.monto) })}>Guardar</Btn>
         <Btn kind="ghost" onClick={()=>onDelete(f.id)}>Eliminar</Btn>
       </div>
+    </Modal>
+  );
+}
+
+/* ================= DINERO ================= */
+const EN_BANCO = ["SINPE", "Tarjeta", "Otro"];
+
+function Dinero({ ventas, gastos, cierres, movs, cfg, guardar, borrar, aviso, usuario }) {
+  const [depositar, setDepositar] = useState(false);
+  const [ajustar, setAjustar] = useState(false);
+
+  const fondo = cfg.fondoCaja || 0;
+
+  /* --- caja física --- */
+  const ultimoCierre = cierres.length ? cierres.map((c)=>c.fecha).sort().slice(-1)[0] : null;
+  const desdeCierre = (f) => !ultimoCierre || f > ultimoCierre;
+  const efeEntra = ventas.filter((v)=>v.pago==="Efectivo" && desdeCierre(v.fecha)).reduce((a,v)=>a+v.monto,0);
+  const efeSale = gastos.filter((g)=>g.pago==="Efectivo" && desdeCierre(g.fecha)).reduce((a,g)=>a+g.monto,0);
+  const caja = fondo + efeEntra - efeSale;
+
+  /* --- pendiente de depositar --- */
+  const retirado = cierres.reduce((a,c)=>a+(c.retiro||0),0);
+  const depositos = movs.filter((m)=>m.tipo==="deposito");
+  const depositado = depositos.reduce((a,m)=>a+m.monto,0);
+  const porDepositar = retirado - depositado;
+
+  /* --- banco --- */
+  const ajustes = movs.filter((m)=>m.tipo==="ajuste");
+  const entraBanco = ventas.filter((v)=>EN_BANCO.includes(v.pago)).reduce((a,v)=>a+v.monto,0);
+  const saleBanco = gastos.filter((g)=>EN_BANCO.includes(g.pago)).reduce((a,g)=>a+g.monto,0);
+  const banco = (cfg.saldoBanco||0) + entraBanco - saleBanco + depositado + ajustes.reduce((a,m)=>a+m.monto,0);
+
+  const totalNegocio = caja + porDepositar + banco;
+
+  /* cierres que generaron el pendiente, del más viejo al más nuevo */
+  const pendientes = useMemo(()=>{
+    const cs = cierres.filter((c)=>(c.retiro||0)>0).sort((a,b)=>(a.fecha<b.fecha?-1:1));
+    let cubierto = depositado, out = [];
+    cs.forEach((c)=>{
+      const r = c.retiro||0;
+      if (cubierto >= r) { cubierto -= r; return; }
+      out.push({ ...c, falta: r - cubierto });
+      cubierto = 0;
+    });
+    return out.reverse();
+  }, [cierres, depositado]);
+
+  const historial = [...movs].sort((a,b)=>(a.fecha<b.fecha?1:a.fecha>b.fecha?-1:(b.creado||0)-(a.creado||0)));
+
+  return (
+    <div className="space-y-3">
+      <Card className="p-4">
+        <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-3">Dónde está la plata</div>
+
+        <div className="space-y-3">
+          <div className="flex justify-between items-baseline">
+            <div>
+              <div className="text-sm font-medium">En la caja</div>
+              <div className="text-[11px] text-stone-500">{ultimoCierre ? "desde el cierre del " + fmtFecha(ultimoCierre) : "sin cierres todavía"}</div>
+            </div>
+            <span className="font-mono tabular-nums text-lg">{C(caja)}</span>
+          </div>
+
+          <div className="flex justify-between items-baseline">
+            <div>
+              <div className="text-sm font-medium">
+                {porDepositar > 0 && <span className="text-stone-500 mr-1.5">◐</span>}
+                Por depositar
+              </div>
+              <div className="text-[11px] text-stone-500">{porDepositar > 0 ? "retirado de la caja y aún fuera del banco" : "todo depositado"}</div>
+            </div>
+            <span className="font-mono tabular-nums text-lg">{C(porDepositar)}</span>
+          </div>
+
+          <div className="flex justify-between items-baseline">
+            <div>
+              <div className="text-sm font-medium">En el banco</div>
+              <div className="text-[11px] text-stone-500">SINPE, tarjeta y depósitos</div>
+            </div>
+            <span className="font-mono tabular-nums text-lg">{C(banco)}</span>
+          </div>
+        </div>
+
+        <div className="border-t border-stone-300 mt-3 pt-3 flex justify-between items-baseline">
+          <span className="text-sm font-semibold">Total del negocio</span>
+          <span className="font-mono tabular-nums text-xl font-semibold">{C(totalNegocio)}</span>
+        </div>
+      </Card>
+
+      {porDepositar > 0 && (
+        <Card className="p-4">
+          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Falta llevar al banco</div>
+          {pendientes.map((c)=>(
+            <div key={c.id} className="flex justify-between py-1.5 border-b border-stone-100 last:border-0 text-[13px]">
+              <span className="font-mono text-stone-600">
+                {diasDesde(new Date(c.fecha+"T12:00").getTime()) > 5 && <span className="text-stone-900 mr-1">●</span>}
+                {fmtFecha(c.fecha)}
+                <span className="text-stone-400"> · hace {diasDesde(new Date(c.fecha+"T12:00").getTime())} días</span>
+              </span>
+              <span className="font-mono tabular-nums">{C(c.falta)}</span>
+            </div>
+          ))}
+          <Btn kind="warn" className="w-full mt-3 py-3" onClick={()=>setDepositar(true)}>Registrar depósito</Btn>
+          <p className="text-[11px] text-stone-500 mt-2">● lleva más de 5 días fuera del banco.</p>
+        </Card>
+      )}
+
+      <div className="flex gap-2">
+        {porDepositar <= 0 && <Btn className="flex-1" onClick={()=>setDepositar(true)}>Registrar depósito</Btn>}
+        <Btn kind="ghost" className="flex-1" onClick={()=>setAjustar(true)}>Ajustar banco</Btn>
+      </div>
+
+      {historial.length > 0 && (
+        <Card className="p-4">
+          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Movimientos</div>
+          {historial.slice(0,30).map((m)=>(
+            <div key={m.id} className="flex justify-between items-center py-2 border-b border-stone-100 last:border-0">
+              <div className="min-w-0">
+                <div className="text-sm">{m.tipo==="deposito" ? "Depósito al banco" : "Ajuste de banco"}</div>
+                <div className="text-[11px] text-stone-500 font-mono truncate">{fmtFecha(m.fecha)}{m.nota ? " · " + m.nota : ""}</div>
+              </div>
+              <div className="flex items-center gap-3 shrink-0">
+                <span className="font-mono tabular-nums text-sm">{m.monto < 0 ? "− " + C(Math.abs(m.monto)) : C(m.monto)}</span>
+                <button onClick={()=>borrar("movimientos", m.id)} className="text-stone-400 text-lg">×</button>
+              </div>
+            </div>
+          ))}
+        </Card>
+      )}
+
+      <p className="text-[11px] text-stone-500 leading-relaxed">
+        Las ventas por SINPE y tarjeta entran directo al banco. Las de efectivo se quedan en la caja hasta que cerrás el día, y ahí pasan a "por depositar" hasta que registrés el depósito.
+      </p>
+
+      {depositar && (
+        <DepositoModal
+          sugerido={Math.max(0, porDepositar)}
+          porDepositar={porDepositar}
+          guardar={guardar}
+          usuario={usuario}
+          aviso={aviso}
+          onClose={()=>setDepositar(false)}
+        />
+      )}
+      {ajustar && (
+        <AjusteBancoModal
+          banco={banco}
+          guardar={guardar}
+          usuario={usuario}
+          aviso={aviso}
+          onClose={()=>setAjustar(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function DepositoModal({ sugerido, porDepositar, guardar, usuario, aviso, onClose }) {
+  const [fecha, setFecha] = useState(hoyISO());
+  const [monto, setMonto] = useState(String(sugerido || ""));
+  const [nota, setNota] = useState("");
+  const m = num(monto);
+  const queda = porDepositar - m;
+
+  return (
+    <Modal title="Registrar depósito" onClose={onClose}>
+      <p className="text-[13px] text-stone-600 mb-3 leading-relaxed">
+        La plata que sacaste de la caja y llevaste al banco. Sale de "por depositar" y entra al saldo bancario.
+      </p>
+      <div className="grid grid-cols-3 gap-2 mb-3">
+        <div className="col-span-2"><Lbl>Fecha</Lbl><Inp type="date" value={fecha} onChange={(e)=>setFecha(e.target.value)} className="font-mono" /></div>
+        <div><Lbl>Monto</Lbl><Inp inputMode="decimal" value={monto} onChange={(e)=>setMonto(e.target.value)} className="font-mono tabular-nums text-lg" /></div>
+      </div>
+      <div className="mb-3"><Lbl>Nota (opcional)</Lbl><Inp value={nota} onChange={(e)=>setNota(e.target.value)} placeholder="Depósito BAC, comprobante 4471" /></div>
+
+      <div className="bg-stone-100 rounded-md p-3 mb-3 space-y-1">
+        <Linea label="Estaba pendiente" val={C(porDepositar)} />
+        <Linea label="Se deposita" val={C(m)} />
+        <div className="pt-2 mt-1 border-t border-stone-300">
+          <Linea label={queda >= 0 ? "Queda pendiente" : "Se depositó de más"} val={C(Math.abs(queda))} fuerte />
+        </div>
+      </div>
+      {queda < 0 && <p className="text-[12px] text-stone-700 border border-stone-400 rounded-md p-2 mb-3">◐ Estás depositando más de lo que salió de la caja. Si es plata de otro lado, mejor registrala como ajuste de banco.</p>}
+
+      <Btn kind="warn" className="w-full py-3" disabled={m<=0} onClick={async ()=>{
+        await guardar("movimientos", { id: UID(), tipo:"deposito", fecha, monto: m, nota: nota.trim(), usuario, creado: Date.now() });
+        aviso("Depósito registrado · " + C(m));
+        onClose();
+      }}>Guardar depósito</Btn>
+    </Modal>
+  );
+}
+
+function AjusteBancoModal({ banco, guardar, usuario, aviso, onClose }) {
+  const [fecha, setFecha] = useState(hoyISO());
+  const [signo, setSigno] = useState("mas");
+  const [monto, setMonto] = useState("");
+  const [nota, setNota] = useState("");
+  const m = num(monto) * (signo === "mas" ? 1 : -1);
+
+  return (
+    <Modal title="Ajustar banco" onClose={onClose}>
+      <p className="text-[13px] text-stone-600 mb-3 leading-relaxed">
+        Para cuadrar el saldo con el estado de cuenta: comisiones, intereses, un traslado, o plata que entró o salió sin pasar por ventas ni gastos.
+      </p>
+      <div className="grid grid-cols-2 gap-1.5 mb-3">
+        {[["mas","Entró al banco"],["menos","Salió del banco"]].map(([id,l])=>(
+          <button key={id} onClick={()=>setSigno(id)} className={"py-2 rounded-md border text-[13px] " + (signo===id ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{l}</button>
+        ))}
+      </div>
+      <div className="grid grid-cols-3 gap-2 mb-3">
+        <div className="col-span-2"><Lbl>Fecha</Lbl><Inp type="date" value={fecha} onChange={(e)=>setFecha(e.target.value)} className="font-mono" /></div>
+        <div><Lbl>Monto</Lbl><Inp inputMode="decimal" value={monto} onChange={(e)=>setMonto(e.target.value)} className="font-mono tabular-nums text-lg" /></div>
+      </div>
+      <div className="mb-3"><Lbl>Motivo</Lbl><Inp value={nota} onChange={(e)=>setNota(e.target.value)} placeholder="Comisión mensual, traslado a cuenta personal…" /></div>
+
+      <div className="bg-stone-100 rounded-md p-3 mb-3 space-y-1">
+        <Linea label="Saldo actual" val={C(banco)} />
+        <Linea label="Queda en" val={C(banco + m)} fuerte />
+      </div>
+
+      <Btn kind="warn" className="w-full py-3" disabled={!num(monto)} onClick={async ()=>{
+        await guardar("movimientos", { id: UID(), tipo:"ajuste", fecha, monto: m, nota: nota.trim(), usuario, creado: Date.now() });
+        aviso("Ajuste registrado");
+        onClose();
+      }}>Guardar ajuste</Btn>
     </Modal>
   );
 }
@@ -1552,6 +1781,11 @@ function AjustesModal({ cfg, guardar, onClose }) {
         <Lbl>Costo del producto (%)</Lbl>
         <Inp inputMode="decimal" value={f.costoPct} onChange={(e)=>setF({...f, costoPct:num(e.target.value)})} className="font-mono" />
         <p className="text-[11px] text-stone-500 mt-1">Solo se usa para las ventas que no calzan con la tabla de precios.</p>
+      </div>
+      <div className="mb-3">
+        <Lbl>Saldo del banco al empezar a usar la app</Lbl>
+        <Inp inputMode="decimal" value={f.saldoBanco} onChange={(e)=>setF({...f, saldoBanco:num(e.target.value)})} className="font-mono" />
+        <p className="text-[11px] text-stone-500 mt-1">Lo que había en la cuenta antes del primer registro. Sobre eso se suman ventas y depósitos.</p>
       </div>
       <div className="mb-3">
         <Lbl>Fondo fijo de la caja</Lbl>
