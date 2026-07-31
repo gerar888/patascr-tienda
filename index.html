@@ -263,51 +263,87 @@ function App() {
   const nHoy = ventas.filter((v) => v.fecha === hoyISO()).length;
   const gastoHoy = gastos.filter((g) => g.fecha === hoyISO()).reduce((a, g) => a + g.monto, 0);
 
+  const TABS = [["registrar","Registrar"],["historial","Historial"],["dinero","Dinero"],["precios","Precios"],["reportes","Reportes"]];
+  const estado = errVentas ? "● sin acceso" : offline ? "◐ sin conexión" : "○ sincronizado";
+
   return (
-    <div className="min-h-screen text-stone-900 pb-24">
-      <header className="bg-stone-900 text-stone-100 px-4 pt-4 pb-5 sticky top-0 z-30">
-        <div className="flex items-baseline justify-between">
-          <span className="text-[11px] uppercase tracking-[0.2em] text-stone-400">Patas CR · San Blas</span>
-          <span className="text-[11px] text-stone-400 font-mono">
-            {errVentas ? "● sin acceso" : offline ? "◐ sin conexión" : "○ sincronizado"}
-          </span>
-        </div>
-        <div className="mt-2 flex items-end gap-3">
-          <div className="font-mono tabular-nums text-4xl tracking-tight">{C(totalHoy)}</div>
-          <div className="text-[11px] text-stone-400 pb-1.5 leading-tight">hoy<br />{nHoy} {nHoy === 1 ? "venta" : "ventas"}</div>
-        </div>
-        {gastoHoy > 0 && <div className="mt-1 font-mono tabular-nums text-[12px] text-stone-400">{C(gastoHoy)} pagados hoy en compras y gastos</div>}
-      </header>
+    <div className="min-h-screen text-stone-900 pb-24 lg:pb-0 lg:flex">
 
-      <main className="px-3 pt-3 max-w-3xl mx-auto">
-        {offline && !errVentas && <AvisoOffline />}
-        {errVentas && (
-          <div className="border-2 border-stone-900 rounded-lg p-3 mb-3 bg-white">
-            <div className="text-sm font-medium mb-1">● No se está leyendo la base de datos</div>
-            <p className="text-[12px] text-stone-700 leading-relaxed mb-2">
-              Código del error: <span className="font-mono">{errVentas}</span>
-              <br />
-              Sesión iniciada con: <span className="font-mono">{sesion.email}</span>
-            </p>
-            {errVentas === "permission-denied" && (
-              <p className="text-[12px] text-stone-700 leading-relaxed">
-                Ese correo no está en las reglas de Firestore. Entrá a Firebase → Firestore Database → Reglas y verificá que{" "}
-                <span className="font-mono">{sesion.email}</span> aparezca escrito exactamente igual, entre comillas simples. Después tocá Publicar.
-              </p>
-            )}
+      {/* ---------- barra lateral, solo en pantalla grande ---------- */}
+      <aside className="hidden lg:flex lg:flex-col lg:w-60 lg:shrink-0 bg-stone-900 text-stone-100 lg:h-screen lg:sticky lg:top-0">
+        <div className="px-5 pt-6 pb-5 border-b border-stone-700">
+          <div className="text-[11px] uppercase tracking-[0.2em] text-stone-400">Patas CR</div>
+          <div className="text-[11px] text-stone-500">San Blas</div>
+          <div className="mt-4 font-mono tabular-nums text-2xl tracking-tight">{C(totalHoy)}</div>
+          <div className="text-[11px] text-stone-400">hoy · {nHoy} {nHoy === 1 ? "venta" : "ventas"}</div>
+          {gastoHoy > 0 && <div className="font-mono tabular-nums text-[11px] text-stone-500 mt-0.5">{C(gastoHoy)} pagados</div>}
+        </div>
+        <nav className="flex-1 py-3">
+          {TABS.map(([id,l]) => (
+            <button
+              key={id}
+              onClick={() => setTab(id)}
+              className={"w-full text-left px-5 py-2.5 text-sm border-l-2 " + (tab === id ? "border-amber-500 bg-stone-800 text-white font-medium" : "border-transparent text-stone-400 hover:text-stone-200")}
+            >
+              {l}
+            </button>
+          ))}
+        </nav>
+        <div className="px-5 py-4 border-t border-stone-700">
+          <div className="font-mono text-[11px] text-stone-400">{estado}</div>
+          <div className="text-[11px] text-stone-500 truncate mt-1">{sesion.email}</div>
+        </div>
+      </aside>
+
+      <div className="lg:flex-1 lg:min-w-0">
+
+        {/* ---------- encabezado, solo en móvil ---------- */}
+        <header className="lg:hidden bg-stone-900 text-stone-100 px-4 pt-4 pb-5 sticky top-0 z-30">
+          <div className="flex items-baseline justify-between">
+            <span className="text-[11px] uppercase tracking-[0.2em] text-stone-400">Patas CR · San Blas</span>
+            <span className="text-[11px] text-stone-400 font-mono">{estado}</span>
           </div>
-        )}
-        {tab === "registrar" && <Registrar ventas={ventas} gastos={gastos} fijos={fijos} precios={precios} enlaces={enlaces} cierres={cierres} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={sesion.email} />}
-        {tab === "historial" && <Historial ventas={ventas} gastos={gastos} guardar={guardar} borrar={borrar} aviso={aviso} />}
-        {tab === "dinero" && <Dinero ventas={ventas} gastos={gastos} cierres={cierres} movs={movs} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={sesion.email} />}
-        {tab === "precios" && <Precios precios={precios} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} />}
-        {tab === "reportes" && <Reportes ventas={ventas} gastos={gastos} precios={precios} fijos={fijos} enlaces={enlaces} cierres={cierres} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} correo={sesion.email} />}
-      </main>
+          <div className="mt-2 flex items-end gap-3">
+            <div className="font-mono tabular-nums text-4xl tracking-tight">{C(totalHoy)}</div>
+            <div className="text-[11px] text-stone-400 pb-1.5 leading-tight">hoy<br />{nHoy} {nHoy === 1 ? "venta" : "ventas"}</div>
+          </div>
+          {gastoHoy > 0 && <div className="mt-1 font-mono tabular-nums text-[12px] text-stone-400">{C(gastoHoy)} pagados hoy en compras y gastos</div>}
+        </header>
 
-      {toast && <div className="fixed bottom-24 left-1/2 -translate-x-1/2 bg-stone-900 text-white text-sm px-4 py-2 rounded-full z-50 shadow-lg">{toast}</div>}
+        <main className="px-3 pt-3 lg:px-8 lg:pt-7 lg:pb-10 max-w-3xl lg:max-w-6xl mx-auto">
+          <div className="hidden lg:block mb-5">
+            <h1 className="text-xl font-semibold">{TABS.find((t)=>t[0]===tab)[1]}</h1>
+          </div>
 
-      <nav className="fixed bottom-0 inset-x-0 bg-white border-t border-stone-300 grid grid-cols-5 z-40 pb-[env(safe-area-inset-bottom)]">
-        {[["registrar","Registrar"],["historial","Historial"],["dinero","Dinero"],["precios","Precios"],["reportes","Reportes"]].map(([id,l]) => (
+          {offline && !errVentas && <AvisoOffline />}
+          {errVentas && (
+            <div className="border-2 border-stone-900 rounded-lg p-3 mb-3 bg-white">
+              <div className="text-sm font-medium mb-1">● No se está leyendo la base de datos</div>
+              <p className="text-[12px] text-stone-700 leading-relaxed mb-2">
+                Código del error: <span className="font-mono">{errVentas}</span>
+                <br />
+                Sesión iniciada con: <span className="font-mono">{sesion.email}</span>
+              </p>
+              {errVentas === "permission-denied" && (
+                <p className="text-[12px] text-stone-700 leading-relaxed">
+                  Ese correo no está en las reglas de Firestore. Entrá a Firebase → Firestore Database → Reglas y verificá que{" "}
+                  <span className="font-mono">{sesion.email}</span> aparezca escrito exactamente igual, entre comillas simples. Después tocá Publicar.
+                </p>
+              )}
+            </div>
+          )}
+          {tab === "registrar" && <Registrar ventas={ventas} gastos={gastos} fijos={fijos} precios={precios} enlaces={enlaces} cierres={cierres} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={sesion.email} />}
+          {tab === "historial" && <Historial ventas={ventas} gastos={gastos} guardar={guardar} borrar={borrar} aviso={aviso} />}
+          {tab === "dinero" && <Dinero ventas={ventas} gastos={gastos} cierres={cierres} movs={movs} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={sesion.email} />}
+          {tab === "precios" && <Precios precios={precios} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} />}
+          {tab === "reportes" && <Reportes ventas={ventas} gastos={gastos} precios={precios} fijos={fijos} enlaces={enlaces} cierres={cierres} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} correo={sesion.email} />}
+        </main>
+      </div>
+
+      {toast && <div className="fixed bottom-24 lg:bottom-8 left-1/2 -translate-x-1/2 bg-stone-900 text-white text-sm px-4 py-2 rounded-full z-50 shadow-lg">{toast}</div>}
+
+      <nav className="lg:hidden fixed bottom-0 inset-x-0 bg-white border-t border-stone-300 grid grid-cols-5 z-40 pb-[env(safe-area-inset-bottom)]">
+        {TABS.map(([id,l]) => (
           <button key={id} onClick={() => setTab(id)} className={"py-3 text-[11px] font-medium border-t-2 " + (tab === id ? "border-amber-500 text-stone-900" : "border-transparent text-stone-500")}>{l}</button>
         ))}
       </nav>
@@ -404,9 +440,11 @@ function Registrar({ ventas, gastos, fijos, precios, enlaces, cierres, cfg, guar
           <button key={id} onClick={() => setModo(id)} className={"py-2.5 rounded-md border text-sm font-medium " + (modo === id ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300 text-stone-600")}>{l}</button>
         ))}
       </div>
+      <div className="lg:max-w-2xl">
       {modo === "venta"
         ? <VentaForm ventas={ventas} gastos={gastos} precios={precios} enlaces={enlaces} cierres={cierres} cfg={cfg} guardar={guardar} aviso={aviso} usuario={usuario} />
         : <GastoForm gastos={gastos} fijos={fijos} guardar={guardar} borrar={borrar} aviso={aviso} usuario={usuario} />}
+      </div>
     </div>
   );
 }
@@ -852,7 +890,7 @@ function Historial({ ventas, gastos, guardar, borrar, aviso }) {
         ))}
       </div>
       {grupos.length === 0 && <p className="text-sm text-stone-500 text-center py-8">Nada que mostrar.</p>}
-      <div className="space-y-3">
+      <div className="space-y-3 lg:space-y-0 lg:grid lg:grid-cols-2 lg:gap-3 lg:items-start">
         {grupos.slice(0,40).map(([fecha, lista])=>{
           const ent = lista.filter((x)=>x._t==="venta").reduce((a,x)=>a+x.monto,0);
           const sal = lista.filter((x)=>x._t==="gasto").reduce((a,x)=>a+x.monto,0);
@@ -936,6 +974,48 @@ function EditarGastoModal({ g, onClose, onSave, onDelete }) {
   );
 }
 
+/* gráfico de barras diario, monocromo */
+function GraficoDias({ datos, referencia }) {
+  if (!datos.length) return null;
+  const W = 720, H = 190, padL = 8, padR = 8, padB = 26, padT = 12;
+  const max = Math.max(...datos.map((d)=>d.t), referencia || 0) * 1.1 || 1;
+  const ancho = (W - padL - padR) / datos.length;
+  const barW = Math.max(3, Math.min(30, ancho * 0.62));
+  const yDe = (v) => padT + (H - padT - padB) * (1 - v / max);
+  const cada = datos.length > 20 ? 5 : datos.length > 12 ? 3 : 2;
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: "auto" }} preserveAspectRatio="none">
+      <line x1={padL} y1={H-padB} x2={W-padR} y2={H-padB} stroke="#d6d3d1" strokeWidth="1" />
+      {referencia > 0 && (
+        <>
+          <line x1={padL} y1={yDe(referencia)} x2={W-padR} y2={yDe(referencia)} stroke="#78716c" strokeWidth="1.5" strokeDasharray="6 4" />
+          <text x={W-padR} y={yDe(referencia)-5} textAnchor="end" fontSize="10" fill="#78716c" fontFamily="ui-monospace, monospace">
+            meta diaria {C(referencia)}
+          </text>
+        </>
+      )}
+      {datos.map((d,i)=>{
+        const x = padL + i*ancho + (ancho-barW)/2;
+        const y = yDe(d.t);
+        const alto = Math.max(1, (H - padB) - y);
+        const bajo = referencia > 0 && d.t < referencia;
+        return (
+          <g key={d.f}>
+            <rect x={x} y={y} width={barW} height={alto} rx="2"
+              fill={bajo ? "#ffffff" : "#292524"} stroke="#292524" strokeWidth={bajo ? 1.5 : 0} />
+            {i % cada === 0 && (
+              <text x={x+barW/2} y={H-padB+13} textAnchor="middle" fontSize="9" fill="#a8a29e" fontFamily="ui-monospace, monospace">
+                {d.f.slice(8)}
+              </text>
+            )}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 /* ================= DINERO ================= */
 const EN_BANCO = ["SINPE", "Tarjeta", "Otro"];
 
@@ -982,7 +1062,15 @@ function Dinero({ ventas, gastos, cierres, movs, cfg, guardar, borrar, aviso, us
   const historial = [...movs].sort((a,b)=>(a.fecha<b.fecha?1:a.fecha>b.fecha?-1:(b.creado||0)-(a.creado||0)));
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <KPI k="Total del negocio" v={C(totalNegocio)} sub="caja + pendiente + banco" oscuro />
+        <KPI k="En la caja" v={C(caja)} sub={ultimoCierre ? "desde el " + fmtFecha(ultimoCierre) : "sin cierres"} />
+        <KPI k="Por depositar" v={C(porDepositar)} sub={porDepositar>0 ? "◐ fuera del banco" : "○ al día"} />
+        <KPI k="En el banco" v={C(banco)} sub="SINPE, tarjeta y depósitos" />
+      </div>
+
+      <div className="grid lg:grid-cols-2 gap-4 items-start">
       <Card className="p-4">
         <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-3">Dónde está la plata</div>
 
@@ -1039,9 +1127,11 @@ function Dinero({ ventas, gastos, cierres, movs, cfg, guardar, borrar, aviso, us
         </Card>
       )}
 
+      </div>
+
       <div className="flex gap-2">
-        {porDepositar <= 0 && <Btn className="flex-1" onClick={()=>setDepositar(true)}>Registrar depósito</Btn>}
-        <Btn kind="ghost" className="flex-1" onClick={()=>setAjustar(true)}>Ajustar banco</Btn>
+        {porDepositar <= 0 && <Btn className="flex-1 lg:flex-none" onClick={()=>setDepositar(true)}>Registrar depósito</Btn>}
+        <Btn kind="ghost" className="flex-1 lg:flex-none" onClick={()=>setAjustar(true)}>Ajustar banco</Btn>
       </div>
 
       {historial.length > 0 && (
@@ -1201,7 +1291,7 @@ function Precios({ precios, cfg, guardar, borrar, aviso }) {
             <button onClick={()=>setSoloBajos(!soloBajos)} className="text-[12px] text-stone-600 underline">{soloBajos ? "Ver todos" : "Ver solo los que van bajo la meta"}</button>
             <span className="text-[11px] text-stone-500 font-mono">{lista.length} de {precios.length}</span>
           </div>
-          <div className="space-y-2">
+          <div className="space-y-2 lg:space-y-0 lg:grid lg:grid-cols-2 lg:gap-3">
             {lista.map((p)=>{
               const ck = p.peso>0 ? p.costo/p.peso : 0;
               const mg = p.precioKilo>0 ? margen(p.precioKilo, ck) : null;
@@ -1445,6 +1535,8 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, cfg, guard
 
   const nomMes = new Date(ay, am-1, 1).toLocaleDateString("es-CR", { month: "long", year: "numeric" });
 
+  const metaDiaria = habTotal > 0 ? cfg.meta / habTotal : 0;
+
   return (
     <div className="space-y-4">
       {meses.length>1 && (
@@ -1452,6 +1544,28 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, cfg, guard
           {meses.map((m)=>(<button key={m} onClick={()=>setMes(m)} className={"px-3 py-1.5 rounded-full border text-xs whitespace-nowrap font-mono " + (mes===m ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{m}</button>))}
         </div>
       )}
+
+      {/* ---------- FILA DE INDICADORES ---------- */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <KPI k="Vendido" v={C(total)} sub={titulo(nomMes)} oscuro />
+        <KPI k="Ganancia del producto" v={C(gananciaBruta)} sub={`${margenBruto.toFixed(0)}% de margen`} />
+        <KPI k="Ventas registradas" v={String(delMes.length)} sub={`${C(ticket)} promedio`} />
+        <KPI k="Queda después de fijos" v={C(gananciaNeta)} sub={fijosPagados>0 ? `menos ${C(fijosPagados)} pagados` : "sin fijos cargados"} />
+      </div>
+
+      {/* ---------- GRÁFICO ---------- */}
+      {porDia.length>0 && (
+        <Card className="p-4">
+          <div className="flex justify-between items-baseline mb-2">
+            <span className="text-[11px] uppercase tracking-[0.15em] text-stone-500">Venta día por día</span>
+            <span className="font-mono tabular-nums text-[12px] text-stone-500">promedio {C(promDia)}</span>
+          </div>
+          <GraficoDias datos={porDia} referencia={metaDiaria} />
+          <p className="text-[11px] text-stone-500 mt-2">Las barras huecas son los días que quedaron bajo la meta diaria.</p>
+        </Card>
+      )}
+
+      <div className="grid lg:grid-cols-2 gap-4 items-start">
 
       {/* ---------- 1. LO ESENCIAL ---------- */}
       <Card className="p-4">
@@ -1610,12 +1724,14 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, cfg, guard
         </Card>
       )}
 
+      </div>
+
       <button onClick={()=>setDetalle(!detalle)} className="w-full text-center text-[12px] text-stone-600 underline py-1">
         {detalle ? "Ocultar el detalle" : "Ver más detalle (pagos, días, clientes)"}
       </button>
 
       {detalle && (
-        <>
+        <div className="grid lg:grid-cols-2 gap-4 items-start">
           {porPago.length>0 && (
             <Card className="p-4">
               <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Cómo pagaron</div>
@@ -1627,19 +1743,6 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, cfg, guard
             <Card className="p-4">
               <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">En qué se fue la plata</div>
               {porCat.map((x)=><Linea key={x.c} label={x.c} val={`${C(x.t)} · ${((x.t/salidas)*100).toFixed(0)}%`} />)}
-            </Card>
-          )}
-
-          {porDia.length>0 && (
-            <Card className="p-4">
-              <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Venta por día</div>
-              {porDia.map((d)=>(
-                <div key={d.f} className="flex items-center gap-2 py-1">
-                  <span className="font-mono text-[11px] text-stone-500 w-14 shrink-0">{fmtFecha(d.f).slice(0,5)}</span>
-                  <div className="flex-1 h-2.5 bg-stone-200 rounded-sm overflow-hidden"><div className="h-full bg-stone-800" style={{ width: d.pct+"%" }} /></div>
-                  <span className="font-mono tabular-nums text-[12px] w-20 text-right">{C(d.t)}</span>
-                </div>
-              ))}
             </Card>
           )}
 
@@ -1655,7 +1758,7 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, cfg, guard
               <p className="text-[11px] text-stone-500 mt-2">★ compró más de una vez este mes.</p>
             </Card>
           )}
-        </>
+        </div>
       )}
 
       <div className="flex gap-2">
@@ -1763,6 +1866,14 @@ function EnlacesModal({ sinLista, precios, enlaces, guardar, borrar, onClose, av
     </Modal>
   );
 }
+
+const KPI = ({ k, v, sub, oscuro }) => (
+  <div className={"rounded-lg border p-3 lg:p-4 " + (oscuro ? "bg-stone-900 border-stone-900 text-stone-100" : "bg-white border-stone-300")}>
+    <div className={"text-[10px] uppercase tracking-wide " + (oscuro ? "text-stone-400" : "text-stone-500")}>{k}</div>
+    <div className="font-mono tabular-nums text-xl lg:text-2xl font-semibold mt-0.5 leading-tight">{v}</div>
+    {sub && <div className={"text-[11px] mt-0.5 " + (oscuro ? "text-stone-400" : "text-stone-500")}>{sub}</div>}
+  </div>
+);
 
 const B = ({ k, v, sub, grande }) => (
   <div>
