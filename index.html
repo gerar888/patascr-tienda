@@ -352,7 +352,7 @@ function App() {
           )}
           {tab === "registrar" && <Registrar ventas={ventas} gastos={gastos} fijos={fijos} precios={precios} enlaces={enlaces} cierres={cierres} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={sesion.email} />}
           {tab === "historial" && <Historial ventas={ventas} gastos={gastos} guardar={guardar} borrar={borrar} aviso={aviso} />}
-          {tab === "dinero" && <Dinero ventas={ventas} gastos={gastos} cierres={cierres} movs={movs} precios={precios} enlaces={enlaces} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={sesion.email} />}
+          {tab === "dinero" && <Dinero ventas={ventas} gastos={gastos} cierres={cierres} movs={movs} precios={precios} enlaces={enlaces} fijos={fijos} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={sesion.email} />}
           {tab === "precios" && <Precios precios={precios} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} />}
           {tab === "reportes" && <Reportes ventas={ventas} gastos={gastos} precios={precios} fijos={fijos} enlaces={enlaces} cierres={cierres} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} correo={sesion.email} />}
         </main>
@@ -1059,7 +1059,7 @@ function GraficoDias({ datos, referencia }) {
 /* ---------- waterfall monocromo ---------- */
 function Waterfall({ pasos }) {
   if (!pasos.length) return null;
-  const W = 780, H = 300, padL = 6, padR = 6, padT = 34, padB = 74;
+  const W = Math.max(780, pasos.length * 132), H = 300, padL = 6, padR = 6, padT = 34, padB = 74;
   let acum = 0;
   const barras = pasos.map((p)=>{
     let desde, hasta;
@@ -1077,7 +1077,7 @@ function Waterfall({ pasos }) {
 
   return (
     <div className="overflow-x-auto -mx-1">
-      <svg viewBox={`0 0 ${W} ${H}`} style={{ minWidth: 640, width: "100%", height: "auto" }}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ minWidth: Math.min(W, 900), width: "100%", height: "auto" }}>
         <line x1={padL} y1={y(0)} x2={W-padR} y2={y(0)} stroke="#d6d3d1" strokeWidth="1" />
         {barras.map((b,i)=>{
           const cx = padL + i*ancho + ancho/2;
@@ -1086,7 +1086,9 @@ function Waterfall({ pasos }) {
           const alto = Math.max(2, Math.abs(y(b.desde) - y(b.hasta)));
           const total = b.tipo === "total";
           const baja = b.tipo === "baja";
-          const sig = total ? "" : baja ? "− " : "+ ";
+          const negativo = total && b.valor < 0;
+          const hueco = baja || negativo;
+          const sig = total ? (negativo ? "− " : "") : baja ? "− " : "+ ";
           const sig2 = barras[i+1];
           return (
             <g key={i}>
@@ -1095,7 +1097,7 @@ function Waterfall({ pasos }) {
                   stroke="#a8a29e" strokeWidth="1" strokeDasharray="3 3" />
               )}
               <rect x={x} y={yTop} width={bw} height={alto} rx="2"
-                fill={baja ? "#ffffff" : "#292524"} stroke="#292524" strokeWidth={baja ? 1.5 : 0} />
+                fill={hueco ? "#ffffff" : "#292524"} stroke="#292524" strokeWidth={hueco ? 1.5 : 0} />
               <text x={cx} y={yTop - 8} textAnchor="middle" fontSize="12" fill="#292524"
                 fontFamily="ui-monospace, monospace" fontWeight={total ? "700" : "400"}>
                 {sig}{C(Math.abs(b.valor))}
@@ -1105,8 +1107,8 @@ function Waterfall({ pasos }) {
               ))}
               {b.tipo !== "total" && (
                 <text x={cx} y={H - padB + 18 + b.label.split("|").length*13 + 2} textAnchor="middle"
-                  fontSize="10" fill="#a8a29e" fontFamily="ui-monospace, monospace">
-                  queda {C(b.hasta)}
+                  fontSize="9" fill="#a8a29e" fontFamily="ui-monospace, monospace">
+                  {C(b.hasta)}
                 </text>
               )}
             </g>
@@ -1169,7 +1171,7 @@ const dentroDelCierre = (mov, cierre) => {
 const descTarjeta = (n) =>
   n <= 0 ? "" : n === 1 ? "las de hoy, entran en la madrugada" : `las de los últimos ${n} días`;
 
-function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, cfg, guardar, borrar, aviso, usuario }) {
+function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, guardar, borrar, aviso, usuario }) {
   const [mes, setMes] = useState(mesDe(hoyISO()));
   const [depositar, setDepositar] = useState(false);
   const [ajustar, setAjustar] = useState(false);
@@ -1244,6 +1246,23 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, cfg, guardar,
   const flujoMes = saldoFin - saldoIni - ajMes;
   const enInventario = costoVendido - merca;
 
+  /* desglose de cada salida del mes, para poder auditar */
+  const salidasDetalle = useMemo(()=>{
+    const m = {};
+    gMes.forEach((g)=>{
+      const k = g.fijoId ? "★ Gastos fijos" : (g.categoria || "Sin categoría");
+      if (!m[k]) m[k] = { cat: k, total: 0, n: 0 };
+      m[k].total += g.monto; m[k].n++;
+    });
+    return Object.values(m).sort((a,b)=>b.total-a.total);
+  }, [gMes]);
+  const salidasTot = gMes.reduce((a,g)=>a+g.monto,0);
+  const cuadraSalidas = Math.abs(salidasTot - gastosMesTot) < 0.5;
+
+  /* gastos fijos que todavía no se cargaron este mes */
+  const fijosPendientes = (fijos||[]).filter((f)=>!gastos.some((g)=>mesDe(g.fecha)===mes && g.fijoId===f.id));
+  const montoPendiente = fijosPendientes.reduce((a,f)=>a+f.monto,0);
+
   /* cierres que generaron el pendiente, del más viejo al más nuevo */
   const pendientes = useMemo(()=>{
     const cs = cierres.filter((c)=>(c.retiro||0)>0).sort((a,b)=>(a.fecha<b.fecha?-1:1));
@@ -1280,7 +1299,56 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, cfg, guardar,
           <span className="font-mono tabular-nums text-[12px] text-stone-500">{saldoFin - saldoIni >= 0 ? "+" : "−"}{C(Math.abs(saldoFin - saldoIni))}</span>
         </div>
         <Waterfall pasos={pasos} />
-        <p className="text-[11px] text-stone-500 mt-1">Las barras rellenas suman, las huecas restan. Abajo de cada una queda el saldo corriente.</p>
+
+        {saldoIni < 0 && (
+          <div className="border border-stone-400 rounded-md p-3 mt-3">
+            <div className="text-[13px] font-medium mb-1">● El mes arranca en negativo</div>
+            <p className="text-[12px] text-stone-700 leading-relaxed">
+              La app no sabe cuánta plata había antes del primer registro, así que lo reconstruye hacia atrás y le da {C(saldoIni)}.
+              Ponés el saldo real en Ajustes → "Saldo del banco al empezar a usar la app" y esta barra se acomoda sola.
+            </p>
+          </div>
+        )}
+
+        <p className="text-[11px] text-stone-500 mt-1">Barras rellenas: saldo a favor o plata que entra. Barras huecas: plata que sale o saldo en contra. El número gris de abajo es el saldo corriente.</p>
+      </Card>
+
+      <Card className="p-4">
+        <div className="flex justify-between items-baseline mb-2">
+          <span className="text-[11px] uppercase tracking-[0.15em] text-stone-500">Todas las salidas de {mes}</span>
+          <span className="font-mono tabular-nums text-[12px] text-stone-500">{gMes.length} movimientos</span>
+        </div>
+        {salidasDetalle.length === 0 ? (
+          <p className="text-sm text-stone-500">No hay salidas registradas este mes.</p>
+        ) : (
+          <>
+            {salidasDetalle.map((x)=>(
+              <div key={x.cat} className="flex justify-between py-1.5 border-b border-stone-100 last:border-0 text-[13px]">
+                <span>{x.cat} <span className="text-stone-500 font-mono">· {x.n}</span></span>
+                <span className="font-mono tabular-nums">{C(x.total)}</span>
+              </div>
+            ))}
+            <div className="flex justify-between pt-2 mt-1 border-t border-stone-300 text-sm font-semibold">
+              <span>Total salido</span>
+              <span className="font-mono tabular-nums">{C(salidasTot)}</span>
+            </div>
+            <p className="text-[12px] text-stone-600 mt-2 leading-relaxed">
+              {cuadraSalidas
+                ? "○ Este total calza exacto con lo que restan las barras del gráfico. Nada quedó por fuera."
+                : `● Hay ${C(Math.abs(salidasTot - gastosMesTot))} de diferencia contra el gráfico. Avisame si ves esto.`}
+            </p>
+          </>
+        )}
+
+        {montoPendiente > 0 && (
+          <div className="border border-stone-400 rounded-md p-3 mt-3">
+            <div className="text-[13px] font-medium mb-1">◐ Faltan {C(montoPendiente)} de gastos fijos por cargar</div>
+            <p className="text-[12px] text-stone-700 leading-relaxed mb-1">
+              {fijosPendientes.map((f)=>f.nombre).join(", ")} — están en la lista pero todavía no se registraron como salida de {mes}, así que no se descuentan de nada.
+            </p>
+            <p className="text-[12px] text-stone-600">Se cargan en Registrar → Sale plata → Gastos fijos del mes.</p>
+          </div>
+        )}
       </Card>
 
       <Card className="p-4">
