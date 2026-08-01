@@ -352,7 +352,7 @@ function App() {
           )}
           {tab === "registrar" && <Registrar ventas={ventas} gastos={gastos} fijos={fijos} precios={precios} enlaces={enlaces} cierres={cierres} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={sesion.email} />}
           {tab === "historial" && <Historial ventas={ventas} gastos={gastos} guardar={guardar} borrar={borrar} aviso={aviso} />}
-          {tab === "dinero" && <Dinero ventas={ventas} gastos={gastos} cierres={cierres} movs={movs} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={sesion.email} />}
+          {tab === "dinero" && <Dinero ventas={ventas} gastos={gastos} cierres={cierres} movs={movs} precios={precios} enlaces={enlaces} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={sesion.email} />}
           {tab === "precios" && <Precios precios={precios} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} />}
           {tab === "reportes" && <Reportes ventas={ventas} gastos={gastos} precios={precios} fijos={fijos} enlaces={enlaces} cierres={cierres} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} correo={sesion.email} />}
         </main>
@@ -1056,6 +1056,99 @@ function GraficoDias({ datos, referencia }) {
   );
 }
 
+/* ---------- waterfall monocromo ---------- */
+function Waterfall({ pasos }) {
+  if (!pasos.length) return null;
+  const W = 780, H = 300, padL = 6, padR = 6, padT = 34, padB = 74;
+  let acum = 0;
+  const barras = pasos.map((p)=>{
+    let desde, hasta;
+    if (p.tipo === "total") { desde = 0; hasta = p.valor; acum = p.valor; }
+    else if (p.tipo === "sube") { desde = acum; hasta = acum + p.valor; acum = hasta; }
+    else { desde = acum; hasta = acum - p.valor; acum = hasta; }
+    return { ...p, desde, hasta };
+  });
+  const vals = barras.flatMap((b)=>[b.desde, b.hasta]).concat([0]);
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const rango = (max - min) || 1;
+  const y = (v) => padT + (H - padT - padB) * (1 - (v - min) / rango);
+  const ancho = (W - padL - padR) / barras.length;
+  const bw = Math.min(78, ancho * 0.56);
+
+  return (
+    <div className="overflow-x-auto -mx-1">
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ minWidth: 640, width: "100%", height: "auto" }}>
+        <line x1={padL} y1={y(0)} x2={W-padR} y2={y(0)} stroke="#d6d3d1" strokeWidth="1" />
+        {barras.map((b,i)=>{
+          const cx = padL + i*ancho + ancho/2;
+          const x = cx - bw/2;
+          const yTop = Math.min(y(b.desde), y(b.hasta));
+          const alto = Math.max(2, Math.abs(y(b.desde) - y(b.hasta)));
+          const total = b.tipo === "total";
+          const baja = b.tipo === "baja";
+          const sig = total ? "" : baja ? "− " : "+ ";
+          const sig2 = barras[i+1];
+          return (
+            <g key={i}>
+              {sig2 && (
+                <line x1={cx+bw/2} y1={y(b.hasta)} x2={padL + (i+1)*ancho + ancho/2 - bw/2} y2={y(b.hasta)}
+                  stroke="#a8a29e" strokeWidth="1" strokeDasharray="3 3" />
+              )}
+              <rect x={x} y={yTop} width={bw} height={alto} rx="2"
+                fill={baja ? "#ffffff" : "#292524"} stroke="#292524" strokeWidth={baja ? 1.5 : 0} />
+              <text x={cx} y={yTop - 8} textAnchor="middle" fontSize="12" fill="#292524"
+                fontFamily="ui-monospace, monospace" fontWeight={total ? "700" : "400"}>
+                {sig}{C(Math.abs(b.valor))}
+              </text>
+              {b.label.split("|").map((ln,k)=>(
+                <text key={k} x={cx} y={H - padB + 18 + k*13} textAnchor="middle" fontSize="11" fill="#57534e">{ln}</text>
+              ))}
+              {b.tipo !== "total" && (
+                <text x={cx} y={H - padB + 18 + b.label.split("|").length*13 + 2} textAnchor="middle"
+                  fontSize="10" fill="#a8a29e" fontFamily="ui-monospace, monospace">
+                  queda {C(b.hasta)}
+                </text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+/* ---------- análisis de costo real, compartido ---------- */
+function analizarVentas(lista, precios, enlaces) {
+  let ventaId=0, costoId=0, sinId=0;
+  const sinIdentificar = {}, porProducto = {};
+  lista.forEach((v)=>{
+    const ps = partes(v.producto), porParte = v.monto/ps.length;
+    ps.forEach((txt)=>{
+      const r = identificar(txt, precios, enlaces);
+      if (r.ignorado) { ventaId += porParte; return; }
+      const c = r.p ? costoDeVenta(r.p, porParte) : null;
+      if (c) {
+        ventaId += porParte; costoId += c.costo;
+        const k = r.p.id;
+        if (!porProducto[k]) porProducto[k] = { nombre: r.p.nombre, venta:0, costo:0, veces:0 };
+        porProducto[k].venta += porParte; porProducto[k].costo += c.costo; porProducto[k].veces++;
+      } else {
+        sinId += porParte;
+        const k = norm(txt);
+        if (!sinIdentificar[k]) sinIdentificar[k] = { texto: txt, veces:0, monto:0 };
+        sinIdentificar[k].veces++; sinIdentificar[k].monto += porParte;
+      }
+    });
+  });
+  const total = lista.reduce((a,v)=>a+v.monto,0);
+  return {
+    ventaId, costoId, sinId,
+    cobertura: total>0 ? (ventaId/total)*100 : 0,
+    sinLista: Object.values(sinIdentificar).sort((a,b)=>b.monto-a.monto),
+    productos: Object.values(porProducto).map((x)=>({ ...x, gan: x.venta-x.costo, pct: x.venta>0 ? ((x.venta-x.costo)/x.venta)*100 : 0 })).sort((a,b)=>b.gan-a.gan)
+  };
+}
+
 /* ================= DINERO ================= */
 const EN_BANCO = ["SINPE", "Tarjeta", "Otro"];
 
@@ -1076,7 +1169,8 @@ const dentroDelCierre = (mov, cierre) => {
 const descTarjeta = (n) =>
   n <= 0 ? "" : n === 1 ? "las de hoy, entran en la madrugada" : `las de los últimos ${n} días`;
 
-function Dinero({ ventas, gastos, cierres, movs, cfg, guardar, borrar, aviso, usuario }) {
+function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, cfg, guardar, borrar, aviso, usuario }) {
+  const [mes, setMes] = useState(mesDe(hoyISO()));
   const [depositar, setDepositar] = useState(false);
   const [ajustar, setAjustar] = useState(false);
 
@@ -1113,6 +1207,43 @@ function Dinero({ ventas, gastos, cierres, movs, cfg, guardar, borrar, aviso, us
 
   const totalNegocio = caja + porDepositar + banco;
 
+  /* ---------- movimiento del mes ---------- */
+  const meses = useMemo(()=>[...new Set([...ventas,...gastos].map((x)=>mesDe(x.fecha)))].sort().reverse(), [ventas,gastos]);
+  const vMes = ventas.filter((v)=>mesDe(v.fecha)===mes);
+  const gMes = gastos.filter((g)=>mesDe(g.fecha)===mes);
+  const ajMes = ajustes.filter((m)=>mesDe(m.fecha)===mes).reduce((a,m)=>a+m.monto,0);
+
+  const ventasMes = vMes.reduce((a,v)=>a+v.monto,0);
+  const merca = gMes.filter((g)=>g.categoria==="Mercadería").reduce((a,g)=>a+g.monto,0);
+  const fijosMes = gMes.filter((g)=>g.fijoId).reduce((a,g)=>a+g.monto,0);
+  const otrosMes = gMes.filter((g)=>g.categoria!=="Mercadería" && !g.fijoId).reduce((a,g)=>a+g.monto,0);
+  const gastosMesTot = merca + fijosMes + otrosMes;
+
+  /* la plata de meses posteriores no cuenta para reconstruir el saldo inicial */
+  const posterior = ventas.filter((v)=>mesDe(v.fecha)>mes).reduce((a,v)=>a+v.monto,0)
+    - gastos.filter((g)=>mesDe(g.fecha)>mes).reduce((a,g)=>a+g.monto,0)
+    + ajustes.filter((m)=>mesDe(m.fecha)>mes).reduce((a,m)=>a+m.monto,0);
+  const saldoFin = totalNegocio - posterior;
+  const saldoIni = saldoFin - ventasMes + gastosMesTot - ajMes;
+
+  const pasos = [
+    { label: "Con lo que|se empezó", valor: saldoIni, tipo: "total" },
+    { label: "Ventas|cobradas", valor: ventasMes, tipo: "sube" },
+    { label: "Compra de|mercadería", valor: merca, tipo: "baja" },
+    { label: "Gastos|fijos", valor: fijosMes, tipo: "baja" },
+    { label: "Otros|gastos", valor: otrosMes, tipo: "baja" },
+  ];
+  if (Math.abs(ajMes) > 0.5) pasos.push({ label: "Ajustes|del banco", valor: Math.abs(ajMes), tipo: ajMes>0 ? "sube" : "baja" });
+  pasos.push({ label: "Con lo que|se quedó", valor: saldoFin, tipo: "total" });
+
+  /* ---------- de esa plata, cuánto es ganancia ---------- */
+  const an = useMemo(()=>analizarVentas(vMes, precios, enlaces), [vMes, precios, enlaces]);
+  const costoVendido = an.costoId + an.sinId * ((cfg.costoPct||80)/100);
+  const gananciaBruta = ventasMes - costoVendido;
+  const gananciaMes = gananciaBruta - fijosMes - otrosMes;
+  const flujoMes = saldoFin - saldoIni - ajMes;
+  const enInventario = costoVendido - merca;
+
   /* cierres que generaron el pendiente, del más viejo al más nuevo */
   const pendientes = useMemo(()=>{
     const cs = cierres.filter((c)=>(c.retiro||0)>0).sort((a,b)=>(a.fecha<b.fecha?-1:1));
@@ -1136,6 +1267,50 @@ function Dinero({ ventas, gastos, cierres, movs, cfg, guardar, borrar, aviso, us
         <KPI k="Por depositar" v={C(porDepositar)} sub={porDepositar>0 ? "◐ fuera del banco" : "○ al día"} />
         <KPI k="En el banco" v={C(banco)} sub={tarjetaPend>0 ? `${C(tarjetaPend)} de tarjeta sin acreditar` : "SINPE, tarjeta y depósitos"} />
       </div>
+
+      {meses.length>1 && (
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {meses.map((m)=>(<button key={m} onClick={()=>setMes(m)} className={"px-3 py-1.5 rounded-full border text-xs whitespace-nowrap font-mono " + (mes===m ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{m}</button>))}
+        </div>
+      )}
+
+      <Card className="p-4">
+        <div className="flex justify-between items-baseline mb-1">
+          <span className="text-[11px] uppercase tracking-[0.15em] text-stone-500">Cómo se movió la plata en {mes}</span>
+          <span className="font-mono tabular-nums text-[12px] text-stone-500">{saldoFin - saldoIni >= 0 ? "+" : "−"}{C(Math.abs(saldoFin - saldoIni))}</span>
+        </div>
+        <Waterfall pasos={pasos} />
+        <p className="text-[11px] text-stone-500 mt-1">Las barras rellenas suman, las huecas restan. Abajo de cada una queda el saldo corriente.</p>
+      </Card>
+
+      <Card className="p-4">
+        <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-3">De ese movimiento, cuánto es ganancia</div>
+        <div className="space-y-1">
+          <Linea label="Se vendió" val={C(ventasMes)} />
+          <Linea label="Lo que costó esa mercadería" val={"− " + C(costoVendido)} />
+          <div className="pt-1.5 mt-1 border-t border-stone-200"><Linea label="Ganancia sobre el producto" val={C(gananciaBruta)} /></div>
+          <Linea label="Gastos fijos del mes" val={"− " + C(fijosMes)} />
+          <Linea label="Otros gastos" val={"− " + C(otrosMes)} />
+          <div className="pt-2 mt-1 border-t border-stone-300">
+            <Linea label={gananciaMes>=0 ? "★ Ganancia real del mes" : "● Pérdida del mes"} val={C(Math.abs(gananciaMes))} fuerte />
+          </div>
+        </div>
+
+        <div className="mt-4 pt-3 border-t border-stone-200 space-y-1">
+          <Linea label="Pero en plata el movimiento fue de" val={(flujoMes>=0?"+":"−") + C(Math.abs(flujoMes))} />
+          <Linea
+            label={enInventario >= 0 ? "Se vendió más de lo que se compró" : "Se compró más de lo que se vendió"}
+            val={C(Math.abs(enInventario))}
+          />
+        </div>
+        <p className="text-[12px] text-stone-600 mt-3 leading-relaxed">
+          {Math.abs(enInventario) < 1000
+            ? "Compras y ventas van parejas, así que la plata que quedó se parece bastante a la ganancia real."
+            : enInventario < 0
+              ? `La ganancia del mes fue ${C(gananciaMes)}, pero quedó ${C(Math.abs(flujoMes))} en plata porque se metieron ${C(Math.abs(enInventario))} de más en mercadería. Esa plata no se perdió: está en sacos en la bodega y se convierte en venta los meses siguientes.`
+              : `Este mes se vendió ${C(enInventario)} más de lo que se repuso, así que quedó más plata de la que corresponde a la ganancia. Ese inventario hay que volver a comprarlo.`}
+        </p>
+      </Card>
 
       <div className="grid lg:grid-cols-2 gap-4 items-start">
       <Card className="p-4">
@@ -1651,36 +1826,7 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, cfg, guard
   const ticket = delMes.length ? total/delMes.length : 0;
 
   /* ---- costo real por venta ---- */
-  const analisis = useMemo(()=>{
-    let ventaId=0, costoId=0, sinId=0;
-    const sinIdentificar = {};
-    const porProducto = {};
-    delMes.forEach((v)=>{
-      const ps = partes(v.producto), porParte = v.monto/ps.length;
-      ps.forEach((txt)=>{
-        const r = identificar(txt, precios, enlaces);
-        if (r.ignorado) { ventaId += porParte; return; }
-        const c = r.p ? costoDeVenta(r.p, porParte) : null;
-        if (c) {
-          ventaId += porParte; costoId += c.costo;
-          const k = r.p.id;
-          if (!porProducto[k]) porProducto[k] = { nombre: r.p.nombre, venta:0, costo:0, veces:0 };
-          porProducto[k].venta += porParte; porProducto[k].costo += c.costo; porProducto[k].veces++;
-        } else {
-          sinId += porParte;
-          const k = norm(txt);
-          if (!sinIdentificar[k]) sinIdentificar[k] = { texto: txt, veces:0, monto:0 };
-          sinIdentificar[k].veces++; sinIdentificar[k].monto += porParte;
-        }
-      });
-    });
-    return {
-      ventaId, costoId, sinId,
-      cobertura: total>0 ? (ventaId/total)*100 : 0,
-      sinLista: Object.values(sinIdentificar).sort((a,b)=>b.monto-a.monto),
-      productos: Object.values(porProducto).map((x)=>({ ...x, gan: x.venta-x.costo, pct: x.venta>0 ? ((x.venta-x.costo)/x.venta)*100 : 0 })).sort((a,b)=>b.gan-a.gan)
-    };
-  }, [delMes, precios, enlaces]);
+  const analisis = useMemo(()=>analizarVentas(delMes, precios, enlaces), [delMes, precios, enlaces]);
 
   /* ganancia: costo real donde se pudo, porcentaje estimado en el resto */
   const margenId = analisis.ventaId>0 ? margen(analisis.ventaId, analisis.costoId) : null;
