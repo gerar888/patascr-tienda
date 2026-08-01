@@ -1175,6 +1175,7 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
   const [mes, setMes] = useState(mesDe(hoyISO()));
   const [depositar, setDepositar] = useState(false);
   const [ajustar, setAjustar] = useState(false);
+  const [auditar, setAuditar] = useState(false);
 
   const fondo = cfg.fondoCaja || 0;
 
@@ -1245,6 +1246,30 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
   const gananciaMes = gananciaBruta - fijosMes - otrosMes;
   const flujoMes = saldoFin - saldoIni - ajMes;
   const enInventario = costoVendido - merca;
+
+  /* cada movimiento que toca el banco, en orden, con saldo corriente */
+  const libroBanco = useMemo(()=>{
+    const items = [
+      ...ventas.filter((v)=>EN_BANCO.includes(v.pago)).map((v)=>({
+        fecha: v.fecha, creado: v.creado||0, monto: v.monto,
+        que: v.producto || "Venta", detalle: v.pago + (v.cliente ? " · " + v.cliente : ""), clase: "venta"
+      })),
+      ...gastos.filter((g)=>EN_BANCO.includes(g.pago)).map((g)=>({
+        fecha: g.fecha, creado: g.creado||0, monto: -g.monto,
+        que: g.detalle || g.categoria, detalle: "Salida · " + g.categoria + " · " + g.pago, clase: "gasto"
+      })),
+      ...movs.filter((m)=>m.tipo==="deposito").map((m)=>({
+        fecha: m.fecha, creado: m.creado||0, monto: m.monto,
+        que: "Depósito de efectivo", detalle: m.nota || "", clase: "deposito"
+      })),
+      ...movs.filter((m)=>m.tipo==="ajuste").map((m)=>({
+        fecha: m.fecha, creado: m.creado||0, monto: m.monto,
+        que: m.metodo==="cuadre" ? "Cuadre manual" : "Ajuste manual", detalle: m.nota || "sin razón anotada", clase: "ajuste"
+      })),
+    ].sort((a,b)=>(a.fecha<b.fecha?-1:a.fecha>b.fecha?1:(a.creado||0)-(b.creado||0)));
+    let acum = cfg.saldoBanco||0;
+    return items.map((x)=>{ acum += x.monto; return { ...x, saldo: acum }; });
+  }, [ventas, gastos, movs, cfg.saldoBanco]);
 
   /* desglose de cada salida del mes, para poder auditar */
   const salidasDetalle = useMemo(()=>{
@@ -1482,6 +1507,7 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
 
       <div className="flex gap-2">
         {porDepositar <= 0 && <Btn className="flex-1 lg:flex-none" onClick={()=>setDepositar(true)}>Registrar depósito</Btn>}
+        <Btn kind="ghost" className="flex-1 lg:flex-none" onClick={()=>setAuditar(true)}>Revisar el saldo</Btn>
         <Btn kind="ghost" className="flex-1 lg:flex-none" onClick={()=>setAjustar(true)}>Cuadrar banco</Btn>
       </div>
 
@@ -1518,6 +1544,16 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
           onClose={()=>setDepositar(false)}
         />
       )}
+      {auditar && (
+        <LibroBancoModal
+          libro={libroBanco}
+          banco={banco}
+          tarjetaPend={tarjetaPend}
+          bancoAcreditado={bancoAcreditado}
+          cfg={cfg}
+          onClose={()=>setAuditar(false)}
+        />
+      )}
       {ajustar && (
         <AjusteBancoModal
           banco={banco}
@@ -1531,6 +1567,81 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
         />
       )}
     </div>
+  );
+}
+
+function LibroBancoModal({ libro, banco, tarjetaPend, bancoAcreditado, cfg, onClose }) {
+  const [real, setReal] = useState("");
+  const [soloAjustes, setSoloAjustes] = useState(false);
+  const r = num(real);
+  const dif = real === "" ? null : r - bancoAcreditado;
+  const lista = (soloAjustes ? libro.filter((x)=>x.clase==="ajuste") : libro).slice().reverse();
+  const totalAjustes = libro.filter((x)=>x.clase==="ajuste").reduce((a,x)=>a+x.monto,0);
+
+  return (
+    <Modal title="De dónde sale el saldo del banco" onClose={onClose}>
+      <div className="bg-stone-100 rounded-md p-3 mb-3 space-y-1">
+        <Linea label="Saldo inicial configurado" val={C(cfg.saldoBanco||0)} />
+        <Linea label="Después de todos los movimientos" val={C(banco)} fuerte />
+        {tarjetaPend > 0 && (
+          <>
+            <Linea label="Menos tarjeta sin acreditar" val={"− " + C(tarjetaPend)} />
+            <Linea label="Comparable con el banco" val={C(bancoAcreditado)} fuerte />
+          </>
+        )}
+      </div>
+
+      <div className="mb-3">
+        <Lbl>Lo que dice el banco ahora</Lbl>
+        <Inp inputMode="decimal" value={real} onChange={(e)=>setReal(e.target.value)} placeholder="223963,28" className="font-mono tabular-nums text-xl" />
+      </div>
+
+      {dif !== null && (
+        <div className="border border-stone-400 rounded-md p-3 mb-3">
+          <div className="flex justify-between items-baseline">
+            <span className="text-sm font-medium">
+              {Math.abs(dif) < 0.005 ? "○ Calza exacto" : dif > 0 ? "◐ El banco tiene más" : "● El banco tiene menos"}
+            </span>
+            <span className="font-mono tabular-nums text-lg font-semibold">{C(Math.abs(dif))}</span>
+          </div>
+          {Math.abs(dif) >= 0.005 && (
+            <p className="text-[12px] text-stone-600 mt-2 leading-relaxed">
+              Buscá la diferencia en la lista de abajo: una venta que entró como SINPE pero fue efectivo, un gasto sin registrar,
+              o un ajuste manual que ya no corresponde. Cuando la encuentres, corregí el movimiento en vez de cuadrar encima.
+            </p>
+          )}
+        </div>
+      )}
+
+      {totalAjustes !== 0 && (
+        <button onClick={()=>setSoloAjustes(!soloAjustes)} className="w-full text-left px-3 py-2 border border-stone-300 rounded-md bg-stone-50 mb-3">
+          <div className="text-[13px]">{soloAjustes ? "○" : "—"} Ver solo los ajustes manuales</div>
+          <div className="text-[11px] text-stone-500 mt-0.5">Suman {C(totalAjustes)}. Son la causa más común de un saldo que no calza.</div>
+        </button>
+      )}
+
+      <div className="border border-stone-200 rounded-md divide-y divide-stone-100 max-h-80 overflow-y-auto">
+        {lista.length === 0 && <p className="text-sm text-stone-500 p-3">Nada que mostrar.</p>}
+        {lista.map((x,i)=>(
+          <div key={i} className="px-3 py-2 flex justify-between items-start gap-2">
+            <div className="min-w-0">
+              <div className="text-[13px] truncate">
+                {x.clase==="ajuste" && <span className="text-stone-500 mr-1">◐</span>}
+                {x.que}
+              </div>
+              <div className="text-[11px] text-stone-500 font-mono truncate">{fmtFecha(x.fecha)} · {x.detalle}</div>
+            </div>
+            <div className="text-right shrink-0">
+              <div className="font-mono tabular-nums text-[13px]">{x.monto < 0 ? "− " + C(Math.abs(x.monto)) : "+ " + C(x.monto)}</div>
+              <div className="font-mono tabular-nums text-[10px] text-stone-400">{C(x.saldo)}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="text-[11px] text-stone-500 mt-2">
+        El número gris de la derecha es el saldo después de ese movimiento. Recorré hacia atrás hasta encontrar el punto donde dejó de calzar con tu banco.
+      </p>
+    </Modal>
   );
 }
 
