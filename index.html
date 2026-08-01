@@ -646,25 +646,37 @@ function ImportarVentasModal({ onClose, onSave }) {
 
 /* ================= CIERRE DE CAJA ================= */
 function CierreModal({ fecha, ventas, gastos, cierres, cfg, guardar, usuario, aviso, onClose }) {
-  const [contado, setContado] = useState("");
+  const fondo = cfg.fondoCaja || 0;
+
+  /* último cierre anterior a la fecha que se está cerrando */
+  const previo = cierres.filter((c)=>c.fecha < fecha).sort((a,b)=>(a.fecha<b.fecha?-1:1)).slice(-1)[0] || null;
+  const desde = previo ? previo.fecha : null;
+  const enRango = (f) => f <= fecha && (!desde || f > desde);
+
+  const monedasPrev = previo ? (previo.monedas != null ? previo.monedas : 0) : 0;
+  const [billetes, setBilletes] = useState("");
+  const [monedas, setMonedas] = useState(String(monedasPrev || ""));
   const [nota, setNota] = useState("");
 
-  const fondo = cfg.fondoCaja || 0;
-  const efeVentas = ventas.filter((v)=>v.fecha===fecha && v.pago==="Efectivo").reduce((a,v)=>a+v.monto,0);
-  const efeGastos = gastos.filter((g)=>g.fecha===fecha && g.pago==="Efectivo").reduce((a,g)=>a+g.monto,0);
-  const esperado = fondo + efeVentas - efeGastos;
-  const real = num(contado);
-  const dif = contado === "" ? null : real - esperado;
-  const retiro = contado === "" ? null : real - fondo;
-  const yaCerrado = cierres.find((c)=>c.fecha===fecha);
+  const efeVentas = ventas.filter((v)=>v.pago==="Efectivo" && enRango(v.fecha)).reduce((a,v)=>a+v.monto,0);
+  const efeGastos = gastos.filter((g)=>g.pago==="Efectivo" && enRango(g.fecha)).reduce((a,g)=>a+g.monto,0);
+  const esperado = fondo + monedasPrev + efeVentas - efeGastos;
 
+  const bil = num(billetes), mon = num(monedas);
+  const contado = bil + mon;
+  const dif = billetes === "" ? null : contado - esperado;
+  const retiro = billetes === "" ? null : bil - fondo;
+
+  const yaCerrado = cierres.find((c)=>c.fecha===fecha);
   const previos = [...cierres].sort((a,b)=>(a.fecha<b.fecha?1:-1)).slice(0,7);
   const acumulado = cierres.reduce((a,c)=>a+(c.diferencia||0),0);
 
   const guardarCierre = async () => {
     await guardar("cierres", {
-      id: fecha, fecha, fondo, esperado, contado: real, diferencia: real - esperado,
-      retiro: Math.max(0, real - fondo), nota: nota.trim(), usuario, creado: Date.now()
+      id: fecha, fecha, fondo, monedasPrev, billetes: bil, monedas: mon,
+      esperado, contado, diferencia: contado - esperado,
+      retiro: Math.max(0, bil - fondo),
+      nota: nota.trim(), usuario, creado: Date.now()
     });
     aviso("Caja cerrada");
     onClose();
@@ -673,47 +685,57 @@ function CierreModal({ fecha, ventas, gastos, cierres, cfg, guardar, usuario, av
   return (
     <Modal title={"Cerrar caja · " + fmtFecha(fecha)} onClose={onClose}>
       <div className="bg-stone-100 rounded-md p-3 mb-3 space-y-1">
-        <Linea label="Fondo con el que se abrió" val={C(fondo)} />
-        <Linea label="Ventas en efectivo" val={"+ " + C(efeVentas)} />
+        <Linea label="Fondo en billetes" val={C(fondo)} />
+        {monedasPrev > 0 && <Linea label="Monedas del cierre anterior" val={"+ " + C(monedasPrev)} />}
+        <Linea label={desde ? `Ventas en efectivo desde el ${fmtFecha(desde)}` : "Ventas en efectivo"} val={"+ " + C(efeVentas)} />
         <Linea label="Pagos en efectivo" val={"− " + C(efeGastos)} />
         <div className="pt-2 mt-1 border-t border-stone-300">
-          <Linea label="Debería haber en caja" val={C(esperado)} fuerte />
+          <Linea label="Debería haber en total" val={C(esperado)} fuerte />
         </div>
       </div>
 
       <div className="mb-3">
-        <Lbl>Cuánto hay contado</Lbl>
-        <Inp inputMode="decimal" value={contado} onChange={(e)=>setContado(e.target.value)} placeholder="0" className="font-mono tabular-nums text-2xl" />
+        <Lbl>Billetes contados</Lbl>
+        <Inp inputMode="decimal" value={billetes} onChange={(e)=>setBilletes(e.target.value)} placeholder="0" className="font-mono tabular-nums text-2xl" />
+        <p className="text-[11px] text-stone-500 mt-1">Solo los billetes. Es lo que se puede depositar en el cajero.</p>
       </div>
 
-      {dif !== null && (
-        <div className="border border-stone-400 rounded-md p-3 mb-3">
-          <div className="flex justify-between items-baseline">
-            <span className="text-sm font-medium">
-              {dif === 0 ? "○ Cuadra exacto" : dif > 0 ? "◐ Sobra" : "● Falta"}
-            </span>
-            <span className="font-mono tabular-nums text-xl font-semibold">{dif === 0 ? C(0) : C(Math.abs(dif))}</span>
-          </div>
-          {dif !== 0 && (
-            <p className="text-[12px] text-stone-600 mt-2 leading-relaxed">
-              {Math.abs(dif) <= 1000
-                ? "Una diferencia chica suele ser vuelto. Anotala igual: lo que importa es si se repite."
-                : "Diferencia grande. Antes de guardar, revisá si quedó alguna venta sin registrar o un pago que no se anotó."}
-            </p>
-          )}
-        </div>
-      )}
+      <div className="mb-3">
+        <Lbl>Monedas y menudo</Lbl>
+        <Inp inputMode="decimal" value={monedas} onChange={(e)=>setMonedas(e.target.value)} placeholder="0" className="font-mono tabular-nums text-lg" />
+        <p className="text-[11px] text-stone-500 mt-1">
+          {monedasPrev > 0
+            ? `Viene puesto lo del cierre anterior (${C(monedasPrev)}). Si no las contaste, dejalo así: la diferencia de abajo va a reflejar solo los billetes.`
+            : "Si no las contás, poné un aproximado. Queda en la caja, no se deposita."}
+        </p>
+      </div>
 
       {retiro !== null && retiro > 0 && (
         <div className="bg-stone-100 rounded-md p-3 mb-3">
-          <Linea label={`Sacá esto y dejá los ${C(fondo)} de fondo`} val={C(retiro)} fuerte />
-          <p className="text-[11px] text-stone-500 mt-1">Queda en "por depositar" hasta que lo registrés en Dinero.</p>
+          <Linea label={`Llevá al banco y dejá ${C(fondo)} en billetes`} val={C(retiro)} fuerte />
+          <p className="text-[11px] text-stone-500 mt-1">Las {C(mon)} en monedas se quedan en la caja. Queda en "por depositar" hasta que lo registrés en Dinero.</p>
         </div>
       )}
       {retiro !== null && retiro < 0 && (
         <p className="text-[12px] text-stone-700 border border-stone-400 rounded-md p-2 mb-3">
-          ● Hay menos de los {C(fondo)} del fondo. Habrá que reponer {C(Math.abs(retiro))} antes de abrir mañana.
+          ● Hay menos de {C(fondo)} en billetes. Faltan {C(Math.abs(retiro))} para completar el fondo antes de abrir mañana.
         </p>
+      )}
+
+      {dif !== null && (
+        <div className="border border-stone-400 rounded-md p-3 mb-3">
+          <div className="flex justify-between items-baseline">
+            <span className="text-sm font-medium">{Math.abs(dif) < 0.005 ? "○ Cuadra exacto" : dif > 0 ? "◐ Sobra" : "● Falta"}</span>
+            <span className="font-mono tabular-nums text-xl font-semibold">{C(Math.abs(dif))}</span>
+          </div>
+          {Math.abs(dif) >= 0.005 && (
+            <p className="text-[12px] text-stone-600 mt-2 leading-relaxed">
+              {Math.abs(dif) <= 1000
+                ? "Una diferencia chica casi siempre son monedas que no se contaron. Anotala igual: lo que importa es si se repite."
+                : "Diferencia grande para ser solo menudo. Revisá si quedó alguna venta sin registrar o un pago sin anotar."}
+            </p>
+          )}
+        </div>
       )}
 
       <div className="mb-4">
@@ -721,9 +743,9 @@ function CierreModal({ fecha, ventas, gastos, cierres, cfg, guardar, usuario, av
         <Inp value={nota} onChange={(e)=>setNota(e.target.value)} placeholder="Se pagó un mandado, faltó vuelto…" />
       </div>
 
-      {yaCerrado && <p className="text-[12px] text-stone-600 mb-3">◐ Esta fecha ya tiene un cierre guardado ({C(yaCerrado.contado)}). Si guardás, lo reemplaza.</p>}
+      {yaCerrado && <p className="text-[12px] text-stone-600 mb-3">◐ Esta fecha ya tiene un cierre guardado. Si guardás, lo reemplaza.</p>}
 
-      <Btn kind="warn" className="w-full py-3" disabled={contado===""} onClick={guardarCierre}>Guardar cierre</Btn>
+      <Btn kind="warn" className="w-full py-3" disabled={billetes===""} onClick={guardarCierre}>Guardar cierre</Btn>
 
       {previos.length>0 && (
         <div className="mt-4 pt-3 border-t border-stone-200">
@@ -732,13 +754,13 @@ function CierreModal({ fecha, ventas, gastos, cierres, cfg, guardar, usuario, av
             <div key={c.id} className="flex justify-between py-1 text-[13px]">
               <span className="font-mono text-stone-600">{fmtFecha(c.fecha)}</span>
               <span className="font-mono tabular-nums">
-                {c.diferencia === 0 ? "○ cuadró" : (c.diferencia > 0 ? "◐ sobró " : "● faltó ") + C(Math.abs(c.diferencia))}
+                {Math.abs(c.diferencia||0) < 0.005 ? "○ cuadró" : ((c.diferencia > 0 ? "◐ sobró " : "● faltó ") + C(Math.abs(c.diferencia)))}
               </span>
             </div>
           ))}
           <div className="flex justify-between pt-2 mt-1 border-t border-stone-200 text-[13px] font-medium">
             <span>Acumulado histórico</span>
-            <span className="font-mono tabular-nums">{acumulado === 0 ? "cuadrado" : (acumulado > 0 ? "sobra " : "falta ") + C(Math.abs(acumulado))}</span>
+            <span className="font-mono tabular-nums">{Math.abs(acumulado) < 0.005 ? "cuadrado" : (acumulado > 0 ? "sobra " : "falta ") + C(Math.abs(acumulado))}</span>
           </div>
         </div>
       )}
@@ -746,7 +768,7 @@ function CierreModal({ fecha, ventas, gastos, cierres, cfg, guardar, usuario, av
   );
 }
 
-/* ================= GASTOS ================= */
+/* ================= GASTOS ================= *//* ================= GASTOS ================= */
 function GastoForm({ gastos, fijos, guardar, borrar, aviso, usuario }) {
   const [fecha, setFecha] = useState(hoyISO());
   const [cat, setCat] = useState("Mercadería");
@@ -1053,11 +1075,14 @@ function Dinero({ ventas, gastos, cierres, movs, cfg, guardar, borrar, aviso, us
   const fondo = cfg.fondoCaja || 0;
 
   /* --- caja física --- */
-  const ultimoCierre = cierres.length ? cierres.map((c)=>c.fecha).sort().slice(-1)[0] : null;
+  const ordenados = [...cierres].sort((a,b)=>(a.fecha<b.fecha?-1:1));
+  const ultimo = ordenados.length ? ordenados[ordenados.length-1] : null;
+  const ultimoCierre = ultimo ? ultimo.fecha : null;
+  const monedas = ultimo ? (ultimo.monedas != null ? ultimo.monedas : 0) : 0;
   const desdeCierre = (f) => !ultimoCierre || f > ultimoCierre;
   const efeEntra = ventas.filter((v)=>v.pago==="Efectivo" && desdeCierre(v.fecha)).reduce((a,v)=>a+v.monto,0);
   const efeSale = gastos.filter((g)=>g.pago==="Efectivo" && desdeCierre(g.fecha)).reduce((a,g)=>a+g.monto,0);
-  const caja = fondo + efeEntra - efeSale;
+  const caja = fondo + monedas + efeEntra - efeSale;
 
   /* --- pendiente de depositar --- */
   const retirado = cierres.reduce((a,c)=>a+(c.retiro||0),0);
@@ -1098,7 +1123,7 @@ function Dinero({ ventas, gastos, cierres, movs, cfg, guardar, borrar, aviso, us
     <div className="space-y-4">
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <KPI k="Total del negocio" v={C(totalNegocio)} sub="caja + pendiente + banco" oscuro />
-        <KPI k="En la caja" v={C(caja)} sub={ultimoCierre ? "desde el " + fmtFecha(ultimoCierre) : "sin cierres"} />
+        <KPI k="En la caja" v={C(caja)} sub={monedas>0 ? `incluye ${C(monedas)} en monedas` : (ultimoCierre ? "desde el " + fmtFecha(ultimoCierre) : "sin cierres")} />
         <KPI k="Por depositar" v={C(porDepositar)} sub={porDepositar>0 ? "◐ fuera del banco" : "○ al día"} />
         <KPI k="En el banco" v={C(banco)} sub={tarjetaPend>0 ? `${C(tarjetaPend)} de tarjeta sin acreditar` : "SINPE, tarjeta y depósitos"} />
       </div>
@@ -1108,12 +1133,27 @@ function Dinero({ ventas, gastos, cierres, movs, cfg, guardar, borrar, aviso, us
         <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-3">Dónde está la plata</div>
 
         <div className="space-y-3">
-          <div className="flex justify-between items-baseline">
-            <div>
-              <div className="text-sm font-medium">En la caja</div>
-              <div className="text-[11px] text-stone-500">{ultimoCierre ? "desde el cierre del " + fmtFecha(ultimoCierre) : "sin cierres todavía"}</div>
+          <div>
+            <div className="flex justify-between items-baseline">
+              <div>
+                <div className="text-sm font-medium">En la caja</div>
+                <div className="text-[11px] text-stone-500">{ultimoCierre ? "desde el cierre del " + fmtFecha(ultimoCierre) : "sin cierres todavía"}</div>
+              </div>
+              <span className="font-mono tabular-nums text-lg">{C(caja)}</span>
             </div>
-            <span className="font-mono tabular-nums text-lg">{C(caja)}</span>
+            <div className="pl-3 mt-1 border-l-2 border-stone-300 space-y-0.5">
+              <div className="flex justify-between text-[12px] text-stone-600">
+                <span>Fondo en billetes</span><span className="font-mono tabular-nums">{C(fondo)}</span>
+              </div>
+              <div className="flex justify-between text-[12px] text-stone-600">
+                <span>Monedas y menudo</span><span className="font-mono tabular-nums">{C(monedas)}</span>
+              </div>
+              {(efeEntra - efeSale) !== 0 && (
+                <div className="flex justify-between text-[12px] text-stone-600">
+                  <span>Efectivo del día sin cerrar</span><span className="font-mono tabular-nums">{C(efeEntra - efeSale)}</span>
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="flex justify-between items-baseline">
@@ -1197,7 +1237,7 @@ function Dinero({ ventas, gastos, cierres, movs, cfg, guardar, borrar, aviso, us
       )}
 
       <p className="text-[11px] text-stone-500 leading-relaxed">
-        Las ventas por SINPE y tarjeta entran directo al banco. Las de efectivo se quedan en la caja hasta que cerrás el día, y ahí pasan a "por depositar" hasta que registrés el depósito.
+        Las ventas por SINPE y tarjeta entran directo al banco. Las de efectivo se quedan en la caja hasta que cerrás el día. Al cerrar, solo los billetes que pasan del fondo van a "por depositar"; las monedas se quedan siempre en la caja.
       </p>
 
       {depositar && (
@@ -2067,9 +2107,9 @@ function AjustesModal({ cfg, guardar, onClose }) {
         <p className="text-[11px] text-stone-500 mt-1">Se usa al cuadrar el banco, para no comparar plata que todavía no llegó.</p>
       </div>
       <div className="mb-3">
-        <Lbl>Fondo fijo de la caja</Lbl>
+        <Lbl>Fondo fijo en billetes</Lbl>
         <Inp inputMode="decimal" value={f.fondoCaja} onChange={(e)=>setF({...f, fondoCaja:num(e.target.value)})} className="font-mono" />
-        <p className="text-[11px] text-stone-500 mt-1">La plata que siempre queda para dar vuelto. Se usa al cerrar caja.</p>
+        <p className="text-[11px] text-stone-500 mt-1">Los billetes que siempre quedan en la caja. Las monedas van aparte y se anotan en cada cierre.</p>
       </div>
       <div className="grid grid-cols-2 gap-3 mb-3">
         <div><Lbl>Margen meta granel (%)</Lbl><Inp inputMode="decimal" value={f.margenGranel} onChange={(e)=>setF({...f, margenGranel:num(e.target.value)})} className="font-mono" /></div>
