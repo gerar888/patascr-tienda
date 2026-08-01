@@ -1065,6 +1065,14 @@ const ACREDITA = [
   [2, "A los dos días"],
   [3, "A los tres días"],
 ];
+/* ¿este movimiento ya entró en ese cierre? compara fecha y, si es el mismo día, la hora */
+const dentroDelCierre = (mov, cierre) => {
+  if (!cierre) return false;
+  if (mov.fecha < cierre.fecha) return true;
+  if (mov.fecha > cierre.fecha) return false;
+  return (mov.creado || 0) <= (cierre.creado || 0);
+};
+
 const descTarjeta = (n) =>
   n <= 0 ? "" : n === 1 ? "las de hoy, entran en la madrugada" : `las de los últimos ${n} días`;
 
@@ -1079,9 +1087,9 @@ function Dinero({ ventas, gastos, cierres, movs, cfg, guardar, borrar, aviso, us
   const ultimo = ordenados.length ? ordenados[ordenados.length-1] : null;
   const ultimoCierre = ultimo ? ultimo.fecha : null;
   const monedas = ultimo ? (ultimo.monedas != null ? ultimo.monedas : 0) : 0;
-  const desdeCierre = (f) => !ultimoCierre || f > ultimoCierre;
-  const efeEntra = ventas.filter((v)=>v.pago==="Efectivo" && desdeCierre(v.fecha)).reduce((a,v)=>a+v.monto,0);
-  const efeSale = gastos.filter((g)=>g.pago==="Efectivo" && desdeCierre(g.fecha)).reduce((a,g)=>a+g.monto,0);
+  const abierto = (m) => !dentroDelCierre(m, ultimo);
+  const efeEntra = ventas.filter((v)=>v.pago==="Efectivo" && abierto(v)).reduce((a,v)=>a+v.monto,0);
+  const efeSale = gastos.filter((g)=>g.pago==="Efectivo" && abierto(g)).reduce((a,g)=>a+g.monto,0);
   const caja = fondo + monedas + efeEntra - efeSale;
 
   /* --- pendiente de depositar --- */
@@ -1094,7 +1102,8 @@ function Dinero({ ventas, gastos, cierres, movs, cfg, guardar, borrar, aviso, us
   const ajustes = movs.filter((m)=>m.tipo==="ajuste");
   const entraBanco = ventas.filter((v)=>EN_BANCO.includes(v.pago)).reduce((a,v)=>a+v.monto,0);
   const saleBanco = gastos.filter((g)=>EN_BANCO.includes(g.pago)).reduce((a,g)=>a+g.monto,0);
-  const banco = (cfg.saldoBanco||0) + entraBanco - saleBanco + depositado + ajustes.reduce((a,m)=>a+m.monto,0);
+  const ajustesTotal = ajustes.reduce((a,m)=>a+m.monto,0);
+  const banco = (cfg.saldoBanco||0) + entraBanco - saleBanco + depositado + ajustesTotal;
 
   /* ventas por tarjeta que el banco todavía no acredita */
   const corte = new Date(); corte.setDate(corte.getDate() - (cfg.diasTarjeta||0));
@@ -1148,11 +1157,12 @@ function Dinero({ ventas, gastos, cierres, movs, cfg, guardar, borrar, aviso, us
               <div className="flex justify-between text-[12px] text-stone-600">
                 <span>Monedas y menudo</span><span className="font-mono tabular-nums">{C(monedas)}</span>
               </div>
-              {(efeEntra - efeSale) !== 0 && (
-                <div className="flex justify-between text-[12px] text-stone-600">
-                  <span>Efectivo del día sin cerrar</span><span className="font-mono tabular-nums">{C(efeEntra - efeSale)}</span>
-                </div>
-              )}
+              <div className="flex justify-between text-[12px] text-stone-600">
+                <span>Ventas en efectivo sin cerrar</span><span className="font-mono tabular-nums">+ {C(efeEntra)}</span>
+              </div>
+              <div className="flex justify-between text-[12px] text-stone-600">
+                <span>Pagos en efectivo sin cerrar</span><span className="font-mono tabular-nums">− {C(efeSale)}</span>
+              </div>
             </div>
           </div>
 
@@ -1175,15 +1185,28 @@ function Dinero({ ventas, gastos, cierres, movs, cfg, guardar, borrar, aviso, us
             <span className="font-mono tabular-nums text-lg">{C(banco)}</span>
           </div>
 
-          {tarjetaPend > 0 && (
-            <div className="flex justify-between items-baseline pl-3 border-l-2 border-stone-300">
-              <div>
-                <div className="text-[13px] text-stone-600">◐ De eso, sin acreditar</div>
-                <div className="text-[11px] text-stone-500">tarjetas: {descTarjeta(cfg.diasTarjeta||0)}</div>
-              </div>
-              <span className="font-mono tabular-nums text-[13px] text-stone-600">{C(tarjetaPend)}</span>
+          <div className="pl-3 border-l-2 border-stone-300 space-y-0.5">
+            <div className="flex justify-between text-[12px] text-stone-600">
+              <span>Saldo inicial configurado</span><span className="font-mono tabular-nums">{C(cfg.saldoBanco||0)}</span>
             </div>
-          )}
+            <div className="flex justify-between text-[12px] text-stone-600">
+              <span>Ventas por SINPE y tarjeta</span><span className="font-mono tabular-nums">+ {C(entraBanco)}</span>
+            </div>
+            <div className="flex justify-between text-[12px] text-stone-600">
+              <span>Depósitos registrados</span><span className="font-mono tabular-nums">+ {C(depositado)}</span>
+            </div>
+            <div className="flex justify-between text-[12px] text-stone-600">
+              <span>Gastos pagados del banco</span><span className="font-mono tabular-nums">− {C(saleBanco)}</span>
+            </div>
+            <div className="flex justify-between text-[12px] text-stone-600">
+              <span>Ajustes y cuadres</span><span className="font-mono tabular-nums">{ajustesTotal < 0 ? "− " : "+ "}{C(Math.abs(ajustesTotal))}</span>
+            </div>
+            {tarjetaPend > 0 && (
+              <div className="flex justify-between text-[12px] text-stone-600 pt-1 mt-1 border-t border-stone-200">
+                <span>◐ De eso, sin acreditar</span><span className="font-mono tabular-nums">{C(tarjetaPend)}</span>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="border-t border-stone-300 mt-3 pt-3 flex justify-between items-baseline">
@@ -1206,7 +1229,9 @@ function Dinero({ ventas, gastos, cierres, movs, cfg, guardar, borrar, aviso, us
             </div>
           ))}
           <Btn kind="warn" className="w-full mt-3 py-3" onClick={()=>setDepositar(true)}>Registrar depósito</Btn>
-          <p className="text-[11px] text-stone-500 mt-2">● lleva más de 5 días fuera del banco.</p>
+          {pendientes.some((c)=>diasDesde(new Date(c.fecha+"T12:00").getTime()) > 5) && (
+            <p className="text-[11px] text-stone-500 mt-2">● lleva más de 5 días fuera del banco.</p>
+          )}
         </Card>
       )}
 
