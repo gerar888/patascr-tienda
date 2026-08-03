@@ -281,7 +281,7 @@ function App() {
   const nHoy = ventas.filter((v) => v.fecha === hoyISO()).length;
   const gastoHoy = gastos.filter((g) => g.fecha === hoyISO()).reduce((a, g) => a + g.monto, 0);
 
-  const TABS = [["registrar","Registrar"],["historial","Historial"],["dinero","Dinero"],["precios","Precios"],["reportes","Reportes"]];
+  const TABS = [["registrar","Registrar"],["historial","Historial"],["dinero","Dinero"],["precios","Precios"],["reportes","Reportes"],["analisis","Análisis"]];
   const estado = errVentas ? "● sin acceso" : offline ? "◐ sin conexión" : "○ sincronizado";
 
   return (
@@ -353,6 +353,7 @@ function App() {
           {tab === "registrar" && <Registrar ventas={ventas} gastos={gastos} fijos={fijos} precios={precios} enlaces={enlaces} cierres={cierres} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={sesion.email} />}
           {tab === "historial" && <Historial ventas={ventas} gastos={gastos} guardar={guardar} borrar={borrar} aviso={aviso} />}
           {tab === "dinero" && <Dinero ventas={ventas} gastos={gastos} cierres={cierres} movs={movs} precios={precios} enlaces={enlaces} fijos={fijos} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={sesion.email} />}
+          {tab === "analisis" && <Analisis ventas={ventas} gastos={gastos} precios={precios} enlaces={enlaces} cierres={cierres} cfg={cfg} />}
           {tab === "precios" && <Precios precios={precios} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} />}
           {tab === "reportes" && <Reportes ventas={ventas} gastos={gastos} precios={precios} fijos={fijos} enlaces={enlaces} cierres={cierres} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} correo={sesion.email} />}
         </main>
@@ -360,9 +361,9 @@ function App() {
 
       {toast && <div className="fixed bottom-24 lg:bottom-8 left-1/2 -translate-x-1/2 bg-stone-900 text-white text-sm px-4 py-2 rounded-full z-50 shadow-lg">{toast}</div>}
 
-      <nav className="lg:hidden fixed bottom-0 inset-x-0 bg-white border-t border-stone-300 grid grid-cols-5 z-40 pb-[env(safe-area-inset-bottom)]">
+      <nav className="lg:hidden fixed bottom-0 inset-x-0 bg-white border-t border-stone-300 grid grid-cols-6 z-40 pb-[env(safe-area-inset-bottom)]">
         {TABS.map(([id,l]) => (
-          <button key={id} onClick={() => setTab(id)} className={"py-3 text-[11px] font-medium border-t-2 " + (tab === id ? "border-amber-500 text-stone-900" : "border-transparent text-stone-500")}>{l}</button>
+          <button key={id} onClick={() => setTab(id)} className={"py-3 text-[10px] leading-tight font-medium border-t-2 " + (tab === id ? "border-amber-500 text-stone-900" : "border-transparent text-stone-500")}>{l}</button>
         ))}
       </nav>
     </div>
@@ -1115,6 +1116,170 @@ function Waterfall({ pasos }) {
           );
         })}
       </svg>
+    </div>
+  );
+}
+
+/* ---------- línea de acumulado contra el ritmo necesario ---------- */
+function GraficoLinea({ series, etiquetas, yMax }) {
+  const W = 760, H = 240, padL = 62, padR = 14, padT = 16, padB = 34;
+  const n = Math.max(...series.map((s)=>s.puntos.length));
+  if (n < 2) return <p className="text-sm text-stone-500 py-6 text-center">Hacen falta al menos dos días con venta.</p>;
+  const max = yMax || Math.max(...series.flatMap((s)=>s.puntos), 1);
+  const x = (i) => padL + (W-padL-padR) * (i/(n-1));
+  const y = (v) => padT + (H-padT-padB) * (1 - v/max);
+  const marcas = [0, 0.25, 0.5, 0.75, 1].map((f)=>f*max);
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: "auto" }}>
+      {marcas.map((m,i)=>(
+        <g key={i}>
+          <line x1={padL} y1={y(m)} x2={W-padR} y2={y(m)} stroke="#e7e5e4" strokeWidth="1" />
+          <text x={padL-6} y={y(m)+3} textAnchor="end" fontSize="9" fill="#a8a29e" fontFamily="ui-monospace, monospace">
+            {m >= 1000 ? Math.round(m/1000)+"k" : Math.round(m)}
+          </text>
+        </g>
+      ))}
+      {series.map((s,k)=>(
+        <g key={k}>
+          <polyline
+            points={s.puntos.map((v,i)=>`${x(i)},${y(v)}`).join(" ")}
+            fill="none" stroke="#292524"
+            strokeWidth={s.guia ? 1.5 : 2.5}
+            strokeDasharray={s.guia ? "6 4" : "0"}
+            strokeLinejoin="round"
+          />
+          {!s.guia && s.puntos.length>0 && (
+            <circle cx={x(s.puntos.length-1)} cy={y(s.puntos[s.puntos.length-1])} r="4" fill="#292524" />
+          )}
+          {s.puntos.length>0 && (
+            <text x={x(s.puntos.length-1) - 4} y={y(s.puntos[s.puntos.length-1]) - 10} textAnchor="end"
+              fontSize="11" fill="#292524" fontFamily="ui-monospace, monospace" fontWeight={s.guia ? "400" : "700"}>
+              {s.nombre}
+            </text>
+          )}
+        </g>
+      ))}
+      {etiquetas.map((e,i)=> e && (
+        <text key={i} x={x(i)} y={H-padB+15} textAnchor="middle" fontSize="9" fill="#a8a29e" fontFamily="ui-monospace, monospace">{e}</text>
+      ))}
+    </svg>
+  );
+}
+
+/* ---------- dispersión: cuánto se vende vs cuánto deja ---------- */
+function GraficoDispersion({ puntos, metaPct }) {
+  const W = 760, H = 300, padL = 58, padR = 20, padT = 20, padB = 46;
+  if (!puntos.length) return <p className="text-sm text-stone-500 py-6 text-center">Hacen falta productos enlazados a la tabla de precios.</p>;
+  const maxX = Math.max(...puntos.map((p)=>p.venta), 1) * 1.12;
+  const maxY = Math.max(...puntos.map((p)=>p.pct), metaPct, 1) * 1.15;
+  const minY = Math.min(0, ...puntos.map((p)=>p.pct));
+  const x = (v) => padL + (W-padL-padR) * (v/maxX);
+  const y = (v) => padT + (H-padT-padB) * (1 - (v-minY)/(maxY-minY));
+  const r = (v) => 4 + Math.min(11, Math.sqrt(v/2));
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: "auto" }}>
+      <line x1={padL} y1={y(minY)} x2={W-padR} y2={y(minY)} stroke="#d6d3d1" strokeWidth="1" />
+      <line x1={padL} y1={padT} x2={padL} y2={y(minY)} stroke="#d6d3d1" strokeWidth="1" />
+      <line x1={padL} y1={y(metaPct)} x2={W-padR} y2={y(metaPct)} stroke="#78716c" strokeWidth="1.5" strokeDasharray="6 4" />
+      <text x={W-padR} y={y(metaPct)-5} textAnchor="end" fontSize="10" fill="#78716c" fontFamily="ui-monospace, monospace">meta {metaPct}%</text>
+      {[0.25,0.5,0.75,1].map((f,i)=>(
+        <text key={i} x={x(maxX*f)} y={H-padB+15} textAnchor="middle" fontSize="9" fill="#a8a29e" fontFamily="ui-monospace, monospace">
+          {Math.round(maxX*f/1000)}k
+        </text>
+      ))}
+      {puntos.map((p,i)=>{
+        const bajo = p.pct < metaPct;
+        return (
+          <g key={i}>
+            <circle cx={x(p.venta)} cy={y(p.pct)} r={r(p.veces)}
+              fill={bajo ? "#ffffff" : "#292524"} stroke="#292524" strokeWidth="1.5" opacity="0.9" />
+            <text x={x(p.venta)} y={y(p.pct) - r(p.veces) - 5} textAnchor="middle" fontSize="9" fill="#57534e">
+              {p.nombre.length > 18 ? p.nombre.slice(0,18)+"…" : p.nombre}
+            </text>
+          </g>
+        );
+      })}
+      <text x={(padL+W-padR)/2} y={H-6} textAnchor="middle" fontSize="10" fill="#78716c">Vendido en el mes →</text>
+      <text x={12} y={(padT+H-padB)/2} textAnchor="middle" fontSize="10" fill="#78716c" transform={`rotate(-90 12 ${(padT+H-padB)/2})`}>Margen %</text>
+    </svg>
+  );
+}
+
+/* ---------- histograma de tiquetes ---------- */
+function Histograma({ valores, cortes }) {
+  const W = 760, H = 220, padL = 40, padR = 14, padT = 16, padB = 46;
+  if (!valores.length) return <p className="text-sm text-stone-500 py-6 text-center">Sin ventas en el período.</p>;
+  const cubos = cortes.map((c,i)=>({
+    label: c.label,
+    n: valores.filter((v)=>v >= c.min && v < c.max).length,
+    monto: valores.filter((v)=>v >= c.min && v < c.max).reduce((a,v)=>a+v,0)
+  }));
+  const max = Math.max(...cubos.map((c)=>c.n), 1);
+  const ancho = (W-padL-padR)/cubos.length;
+  const bw = ancho * 0.72;
+  const y = (v) => padT + (H-padT-padB) * (1 - v/max);
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: "auto" }}>
+      <line x1={padL} y1={y(0)} x2={W-padR} y2={y(0)} stroke="#d6d3d1" strokeWidth="1" />
+      {cubos.map((c,i)=>{
+        const cx = padL + i*ancho + ancho/2;
+        return (
+          <g key={i}>
+            <rect x={cx-bw/2} y={y(c.n)} width={bw} height={Math.max(1, y(0)-y(c.n))} rx="2" fill="#292524" />
+            {c.n > 0 && <text x={cx} y={y(c.n)-6} textAnchor="middle" fontSize="11" fill="#292524" fontFamily="ui-monospace, monospace">{c.n}</text>}
+            <text x={cx} y={H-padB+15} textAnchor="middle" fontSize="9" fill="#78716c">{c.label}</text>
+            <text x={cx} y={H-padB+27} textAnchor="middle" fontSize="9" fill="#a8a29e" fontFamily="ui-monospace, monospace">{C(c.monto)}</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+/* ---------- torta: solo para 2-4 pedazos que suman un total ---------- */
+function Torta({ partes }) {
+  const R = 74, cx = 90, cy = 90;
+  const total = partes.reduce((a,p)=>a+p.valor,0);
+  if (total <= 0) return null;
+  const tramas = ["solido", "rayas", "puntos", "hueco"];
+  let ang = -Math.PI/2;
+  const arcos = partes.map((p,i)=>{
+    const frac = p.valor/total, d = frac*Math.PI*2;
+    const x1 = cx + R*Math.cos(ang), y1 = cy + R*Math.sin(ang);
+    ang += d;
+    const x2 = cx + R*Math.cos(ang), y2 = cy + R*Math.sin(ang);
+    return { ...p, frac, d: `M ${cx} ${cy} L ${x1} ${y1} A ${R} ${R} 0 ${frac>0.5?1:0} 1 ${x2} ${y2} Z`, trama: tramas[i%4] };
+  });
+  const relleno = (t) => t==="solido" ? "#292524" : t==="rayas" ? "url(#rayas)" : t==="puntos" ? "url(#puntos)" : "#ffffff";
+
+  return (
+    <div className="flex items-center gap-5 flex-wrap">
+      <svg viewBox="0 0 180 180" style={{ width: 150, height: 150 }}>
+        <defs>
+          <pattern id="rayas" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+            <rect width="7" height="7" fill="#fff" /><line x1="0" y1="0" x2="0" y2="7" stroke="#292524" strokeWidth="3.5" />
+          </pattern>
+          <pattern id="puntos" width="7" height="7" patternUnits="userSpaceOnUse">
+            <rect width="7" height="7" fill="#fff" /><circle cx="3.5" cy="3.5" r="1.8" fill="#292524" />
+          </pattern>
+        </defs>
+        {arcos.map((a,i)=><path key={i} d={a.d} fill={relleno(a.trama)} stroke="#292524" strokeWidth="1.5" />)}
+      </svg>
+      <div className="flex-1 min-w-[160px] space-y-1.5">
+        {arcos.map((a,i)=>(
+          <div key={i} className="flex items-center gap-2">
+            <svg width="16" height="16" className="shrink-0">
+              <rect width="16" height="16" rx="2" fill={relleno(a.trama)} stroke="#292524" strokeWidth="1.5" />
+            </svg>
+            <span className="text-[13px] flex-1">{a.nombre}</span>
+            <span className="font-mono tabular-nums text-[13px]">{C(a.valor)}</span>
+            <span className="font-mono tabular-nums text-[11px] text-stone-500 w-9 text-right">{(a.frac*100).toFixed(0)}%</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1984,6 +2149,205 @@ function ImportPreciosModal({ onClose, onSave }) {
       </div>
       <Btn kind="warn" className="w-full py-3" disabled={!filas.length} onClick={()=>onSave(filas.map(({_saco, ...r})=>r))}>Cargar {filas.length || ""}</Btn>
     </Modal>
+  );
+}
+
+/* ================= ANÁLISIS ================= */
+function Analisis({ ventas, gastos, precios, enlaces, cierres, cfg }) {
+  const [mes, setMes] = useState(mesDe(hoyISO()));
+  const meses = useMemo(()=>[...new Set(ventas.map((v)=>mesDe(v.fecha)))].sort().reverse(), [ventas]);
+  const vMes = ventas.filter((v)=>mesDe(v.fecha)===mes);
+  const gMes = gastos.filter((g)=>mesDe(g.fecha)===mes);
+  const total = vMes.reduce((a,v)=>a+v.monto,0);
+
+  const [ay, am] = mes.split("-").map(Number);
+  const diasMes = new Date(ay, am, 0).getDate();
+  const esActual = mes === mesDe(hoyISO());
+  const hastaDia = esActual ? new Date().getDate() : diasMes;
+
+  /* --- 1. acumulado vs ritmo necesario --- */
+  const porDiaNum = useMemo(()=>{
+    const m = {};
+    vMes.forEach((v)=>{ const d = +v.fecha.slice(8); m[d] = (m[d]||0) + v.monto; });
+    return m;
+  }, [vMes]);
+
+  const acumulado = [];
+  let ac = 0;
+  for (let d=1; d<=hastaDia; d++) { ac += (porDiaNum[d]||0); acumulado.push(ac); }
+  const ritmo = [];
+  for (let d=1; d<=hastaDia; d++) ritmo.push(cfg.meta * d / diasMes);
+  const etiquetasDias = Array.from({length: hastaDia}, (_,i)=> (i===0 || (i+1)%5===0) ? String(i+1) : "");
+  const vsRitmo = acumulado.length ? acumulado[acumulado.length-1] - ritmo[ritmo.length-1] : 0;
+
+  /* --- 2. dispersión producto: venta vs margen --- */
+  const an = useMemo(()=>analizarVentas(vMes, precios, enlaces), [vMes, precios, enlaces]);
+  const dispersion = an.productos.filter((p)=>p.venta > 0);
+
+  /* --- 3. histograma de tiquetes --- */
+  const montos = vMes.map((v)=>v.monto);
+  const CORTES = [
+    { label: "< 2k", min: 0, max: 2000 },
+    { label: "2–5k", min: 2000, max: 5000 },
+    { label: "5–10k", min: 5000, max: 10000 },
+    { label: "10–20k", min: 10000, max: 20000 },
+    { label: "20–40k", min: 20000, max: 40000 },
+    { label: "40k +", min: 40000, max: Infinity },
+  ];
+  const mediana = (() => {
+    if (!montos.length) return 0;
+    const o = [...montos].sort((a,b)=>a-b), h = Math.floor(o.length/2);
+    return o.length%2 ? o[h] : (o[h-1]+o[h])/2;
+  })();
+  const promedio = montos.length ? total/montos.length : 0;
+
+  /* --- 4. torta de medios de pago --- */
+  const pagos = PAGOS.map((p)=>({ nombre: p, valor: vMes.filter((v)=>v.pago===p).reduce((a,v)=>a+v.monto,0) })).filter((x)=>x.valor>0);
+
+  /* --- métricas extra --- */
+  const porDiaSemana = useMemo(()=>{
+    const acum = Array(7).fill(0), cuenta = Array(7).fill(0);
+    vMes.forEach((v)=>{
+      const [y,m,d] = v.fecha.split("-").map(Number);
+      const dw = new Date(y,m-1,d).getDay();
+      acum[dw] += v.monto;
+    });
+    const diasVistos = Array(7).fill(0);
+    [...new Set(vMes.map((v)=>v.fecha))].forEach((f)=>{
+      const [y,m,d] = f.split("-").map(Number);
+      diasVistos[new Date(y,m-1,d).getDay()]++;
+    });
+    const nom = ["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
+    return nom.map((n,i)=>({ nombre: n, total: acum[i], dias: diasVistos[i], prom: diasVistos[i] ? acum[i]/diasVistos[i] : 0 }))
+      .filter((x)=>x.dias>0).sort((a,b)=>b.prom-a.prom);
+  }, [vMes]);
+
+  const clientesMes = new Set(vMes.filter((v)=>v.cliente).map((v)=>norm(v.cliente)));
+  const conNombre = vMes.filter((v)=>v.cliente).length;
+  const repiten = useMemo(()=>{
+    const c = {};
+    vMes.filter((v)=>v.cliente).forEach((v)=>{ const k = norm(v.cliente); c[k] = (c[k]||0)+1; });
+    return Object.values(c).filter((n)=>n>1).length;
+  }, [vMes]);
+
+  const conc = useMemo(()=>{
+    const t = dispersion.reduce((a,p)=>a+p.venta,0);
+    if (!t) return 0;
+    const top = [...dispersion].sort((a,b)=>b.venta-a.venta).slice(0,3).reduce((a,p)=>a+p.venta,0);
+    return (top/t)*100;
+  }, [dispersion]);
+
+  const cierresMes = cierres.filter((c)=>mesDe(c.fecha)===mes);
+  const difCaja = cierresMes.reduce((a,c)=>a+(c.diferencia||0),0);
+
+  const diasConVenta = new Set(vMes.map((v)=>v.fecha)).size;
+  const mejorDia = Object.entries(porDiaNum).sort((a,b)=>b[1]-a[1])[0];
+
+  return (
+    <div className="space-y-4">
+      {meses.length>1 && (
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {meses.map((m)=>(<button key={m} onClick={()=>setMes(m)} className={"px-3 py-1.5 rounded-full border text-xs whitespace-nowrap font-mono " + (mes===m ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{m}</button>))}
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <KPI k={vsRitmo>=0 ? "Adelante del ritmo" : "Atrás del ritmo"} v={C(Math.abs(vsRitmo))} sub={`meta ${C(cfg.meta)}`} oscuro />
+        <KPI k="Tiquete típico" v={C(mediana)} sub={`promedio ${C(promedio)}`} />
+        <KPI k="Días con venta" v={`${diasConVenta} de ${hastaDia}`} sub={mejorDia ? `mejor: día ${mejorDia[0]} con ${C(mejorDia[1])}` : ""} />
+        <KPI k="Top 3 productos" v={conc.toFixed(0)+"%"} sub="de lo vendido identificado" />
+      </div>
+
+      <Card className="p-4">
+        <div className="flex justify-between items-baseline mb-2">
+          <span className="text-[11px] uppercase tracking-[0.15em] text-stone-500">Acumulado contra la meta</span>
+          <span className="font-mono tabular-nums text-[12px] text-stone-500">{vsRitmo>=0 ? "+" : "−"}{C(Math.abs(vsRitmo))} vs ritmo</span>
+        </div>
+        <GraficoLinea
+          series={[
+            { nombre: "vendido", puntos: acumulado },
+            { nombre: "ritmo", puntos: ritmo, guia: true },
+          ]}
+          etiquetas={etiquetasDias}
+          yMax={Math.max(cfg.meta, ...acumulado) * 1.05}
+        />
+        <p className="text-[12px] text-stone-600 mt-2 leading-relaxed">
+          La línea gruesa es lo vendido acumulado; la punteada es el ritmo que hay que llevar para cerrar en {C(cfg.meta)}.
+          {vsRitmo >= 0
+            ? ` Van ${C(vsRitmo)} arriba de ese ritmo.`
+            : ` Faltan ${C(Math.abs(vsRitmo))} para estar en ritmo; con ${diasMes-hastaDia} días por delante hay que hacer ${C((cfg.meta - (acumulado[acumulado.length-1]||0)) / Math.max(1, diasMes-hastaDia))} por día.`}
+        </p>
+      </Card>
+
+      <Card className="p-4">
+        <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-1">Qué se vende contra cuánto deja</div>
+        <p className="text-[11px] text-stone-500 mb-2">Cada burbuja es un producto. Más a la derecha, más se vendió. Más arriba, mejor margen. El tamaño es cuántas veces se vendió.</p>
+        <GraficoDispersion puntos={dispersion} metaPct={cfg.margenGranel} />
+        <p className="text-[12px] text-stone-600 mt-2 leading-relaxed">
+          Las burbujas huecas están bajo la meta de {cfg.margenGranel}%. Las que están abajo a la derecha son las que más urge revisar: se venden mucho y dejan poco.
+        </p>
+      </Card>
+
+      <div className="grid lg:grid-cols-2 gap-4 items-start">
+        <Card className="p-4">
+          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-1">Tamaño de las ventas</div>
+          <p className="text-[11px] text-stone-500 mb-2">Cuántas ventas caen en cada rango, y cuánta plata representa cada uno.</p>
+          <Histograma valores={montos} cortes={CORTES} />
+          <p className="text-[12px] text-stone-600 mt-2 leading-relaxed">
+            El tiquete típico es {C(mediana)} y el promedio {C(promedio)}.
+            {promedio > mediana * 1.4
+              ? " El promedio va bastante arriba del típico: unas pocas ventas grandes lo están jalando. Para decidir, usá el típico."
+              : " Ambos números se parecen, así que las ventas son bastante parejas."}
+          </p>
+        </Card>
+
+        <Card className="p-4">
+          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-3">Cómo pagaron</div>
+          <Torta partes={pagos} />
+          <p className="text-[12px] text-stone-600 mt-3 leading-relaxed">
+            Lo que entra por SINPE y tarjeta llega solo al banco. El efectivo hay que cerrarlo y depositarlo a mano, así que entre más suba esa tajada, más disciplina de cierre se necesita.
+          </p>
+        </Card>
+      </div>
+
+      <div className="grid lg:grid-cols-2 gap-4 items-start">
+        <Card className="p-4">
+          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Qué día conviene más</div>
+          {porDiaSemana.map((d)=>{
+            const max = Math.max(...porDiaSemana.map((x)=>x.prom), 1);
+            return (
+              <div key={d.nombre} className="flex items-center gap-2 py-1">
+                <span className="text-[12px] w-20 shrink-0">{d.nombre}</span>
+                <div className="flex-1 h-3 bg-stone-200 rounded-sm overflow-hidden">
+                  <div className="h-full bg-stone-800" style={{ width: (d.prom/max*100)+"%" }} />
+                </div>
+                <span className="font-mono tabular-nums text-[11px] w-20 text-right">{C(d.prom)}</span>
+              </div>
+            );
+          })}
+          <p className="text-[12px] text-stone-600 mt-2 leading-relaxed">
+            Promedio por día de semana. Sirve para decidir cuándo reforzar personal o cuándo programar promociones.
+          </p>
+        </Card>
+
+        <Card className="p-4">
+          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Señales del mes</div>
+          <div className="space-y-1">
+            <Linea label="Ventas con cliente anotado" val={`${conNombre} de ${vMes.length} · ${vMes.length ? Math.round(conNombre/vMes.length*100) : 0}%`} />
+            <Linea label="Clientes distintos" val={String(clientesMes.size)} />
+            <Linea label="Clientes que repitieron" val={String(repiten)} />
+            <Linea label="Cobertura de costos reales" val={an.cobertura.toFixed(0)+"%"} />
+            <Linea label="Días cerrados de caja" val={`${cierresMes.length} de ${hastaDia}`} />
+            <Linea label={difCaja===0 ? "Caja acumulada" : difCaja>0 ? "Sobrante de caja" : "Faltante de caja"} val={C(Math.abs(difCaja))} />
+          </div>
+          <p className="text-[12px] text-stone-600 mt-3 leading-relaxed">
+            {conNombre/Math.max(1,vMes.length) < 0.4
+              ? "◐ Menos de la mitad de las ventas lleva cliente anotado. Preguntar el nombre a los recurrentes es lo que habilita la lista de reactivación."
+              : "○ Buena captura de clientes: la lista de quién debería volver va a ser confiable."}
+          </p>
+        </Card>
+      </div>
+    </div>
   );
 }
 
