@@ -6,18 +6,89 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black" />
-<meta name="theme-color" content="#1c1917" />
+<meta name="theme-color" content="#F2F3F0" />
 <title>Patas CR · Control de tienda</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=IBM+Plex+Sans:wght@400;500;600&family=Martian+Mono:wdth,wght@75..112.5,100..800&display=swap" rel="stylesheet">
 <style>
-  body { -webkit-tap-highlight-color: transparent; overscroll-behavior-y: contain; }
-  input, textarea, select { font-size: 16px; } /* evita el zoom automático en iOS */
+  :root{
+    --surface:#F2F3F0;      /* fondo base, gris papel */
+    --ink:#16211C;          /* texto y bordes fuertes */
+    --readout:#0E1614;      /* único panel oscuro de la pantalla */
+    --signal:#0B5D8A;       /* acción primaria, foco, confirmado */
+    --signal-2:#0A4F76;
+    --attention:#E8A317;    /* requiere atención, pendiente, diferencia */
+    --muted:#7A8079;
+    --line:rgba(22,33,28,.14);
+    --line-strong:rgba(22,33,28,.32);
+    --nav-h:calc(52px + env(safe-area-inset-bottom));
+  }
+
+  body, body.bg-stone-100{
+    background:var(--surface);
+    color:var(--ink);
+    font-family:"IBM Plex Sans",system-ui,-apple-system,sans-serif;
+    -webkit-tap-highlight-color:transparent;
+    overscroll-behavior-y:contain;
+  }
+  input, textarea, select{ font-size:16px; } /* evita el zoom automático en iOS */
+
+  /* --- tres caras, tres roles --- */
+  .f-mono{
+    font-family:"Martian Mono",ui-monospace,SFMono-Regular,monospace;
+    font-stretch:87.5%;
+    font-variant-numeric:tabular-nums;
+    letter-spacing:-.02em;
+  }
+  .f-head{
+    font-family:"Archivo",system-ui,sans-serif;
+    font-stretch:82%;
+    font-weight:600;
+    text-transform:uppercase;
+    letter-spacing:.08em;
+    line-height:1.2;
+  }
+
+  /* selectores compuestos: le ganan a las utilidades de Tailwind sin !important */
+  button.f-head{ font-size:12px; }
+  button.btn-lg{ font-size:14px; }
+  button.commit{ min-height:56px; }
+  button.tap-44{ min-height:44px; }
+
+  /* --- el readout: es un input, no un display --- */
+  .readout-input{
+    font-family:"Martian Mono",ui-monospace,monospace;
+    font-stretch:87.5%;
+    font-variant-numeric:tabular-nums;
+    font-size:clamp(34px,11vw,52px);
+    line-height:1.02;
+    letter-spacing:-.035em;
+    width:100%;
+    padding:0;
+    border:0;
+    background:transparent;
+    color:#F2F3F0;
+    caret-color:var(--attention);
+  }
+  .readout-input:focus{ outline:none; }
+  .readout-input::placeholder{ color:rgba(242,243,240,.22); }
+
+  @keyframes asentar{
+    from{ transform:translateY(-.13em); opacity:.5 }
+    to{ transform:none; opacity:1 }
+  }
+  .asentar{ animation:asentar 120ms cubic-bezier(.2,.7,.3,1); }
+  @media (prefers-reduced-motion:reduce){ .asentar{ animation:none } }
+
+  :focus-visible{ outline:2px solid var(--signal); outline-offset:2px; }
 </style>
 </head>
-<body class="bg-stone-100">
+<body>
 <div id="root"></div>
 
 <!-- ============================================================
@@ -195,18 +266,46 @@ function costoDeVenta(p, monto) {
 }
 
 /* ================= UI base ================= */
-const Card = ({ children, className = "" }) => <div className={"bg-white border border-stone-300 rounded-lg " + className}>{children}</div>;
-const Btn = ({ children, onClick, kind = "primary", className = "", disabled }) => {
-  const s = { primary: "bg-stone-900 text-white border-stone-900 active:bg-stone-700", ghost: "bg-white text-stone-800 border-stone-300 active:bg-stone-100", warn: "bg-amber-500 text-stone-900 border-amber-600 active:bg-amber-400" };
-  return <button onClick={onClick} disabled={disabled} className={`px-3 py-2 rounded-md border text-sm font-medium disabled:opacity-40 ${s[kind]} ${className}`}>{children}</button>;
+const Card = ({ children, className = "" }) => (
+  <div className={"bg-white border border-[var(--line-strong)] rounded-[10px] " + className}>{children}</div>
+);
+
+const BTN = {
+  primary:   "bg-[var(--ink)] text-[#F2F3F0] border-[var(--ink)] active:bg-[#0E1614]",
+  ghost:     "bg-white text-[var(--ink)] border-[var(--line-strong)] active:bg-[rgba(22,33,28,.07)]",
+  signal:    "bg-[var(--signal)] text-white border-[var(--signal)] active:bg-[var(--signal-2)]",
+  /* alias histórico: la acción de commit va en signal, nunca en attention */
+  warn:      "bg-[var(--signal)] text-white border-[var(--signal)] active:bg-[var(--signal-2)]",
+  attention: "bg-white text-[var(--ink)] border-[var(--attention)] active:bg-[rgba(232,163,23,.14)]",
 };
-const Lbl = ({ children }) => <span className="block text-[11px] uppercase tracking-wide text-stone-500 mb-1">{children}</span>;
-const Inp = (props) => <input {...props} className={"w-full px-3 py-2 border border-stone-300 rounded-md bg-stone-50 text-stone-900 focus:outline-none focus:ring-2 focus:ring-amber-400 " + (props.className || "")} />;
+const Btn = ({ children, onClick, kind = "primary", className = "", disabled }) => (
+  <button onClick={onClick} disabled={disabled}
+    className={`f-head inline-flex items-center justify-center gap-2 px-3 min-h-[48px] rounded-[8px] border disabled:opacity-40 ${BTN[kind] || BTN.primary} ${className}`}>
+    {children}
+  </button>
+);
+
+const Lbl = ({ children }) => <span className="f-head block text-[11px] text-[var(--muted)] mb-1.5">{children}</span>;
+
+const Inp = (props) => <input {...props} className={"w-full px-3 min-h-[48px] rounded-[8px] border border-[var(--line-strong)] bg-white text-[var(--ink)] placeholder:text-[var(--muted)] focus:outline-none focus:border-[var(--signal)] focus:ring-2 focus:ring-[var(--signal)] " + (props.className || "")} />;
+
+/* Monto: la dirección del dinero va por signo y posición, nunca por color.
+   dir="in" → «+ ₡ 12 450» en ink · dir="out" → «− ₡ 3 200» en muted · flecha opcional para listas mixtas */
+const Monto = ({ v, dir = null, flecha = false, className = "" }) => (
+  <span className={"f-mono text-right whitespace-nowrap " + (dir === "out" ? "text-[var(--muted)] " : "text-[var(--ink)] ") + className}>
+    {flecha && dir ? (dir === "in" ? "▲ " : "▼ ") : ""}{dir === "in" ? "+ " : dir === "out" ? "− " : ""}{v}
+  </span>
+);
+
 const Linea = ({ label, val, fuerte }) => (
-  <div className="flex justify-between text-sm">
-    <span className={fuerte ? "font-medium" : "text-stone-600"}>{label}</span>
-    <span className={"font-mono tabular-nums " + (fuerte ? "font-semibold" : "text-stone-700")}>{val}</span>
+  <div className="flex justify-between items-baseline gap-3 text-[13px]">
+    <span className={fuerte ? "font-medium text-[var(--ink)]" : "text-[var(--muted)]"}>{label}</span>
+    <span className={"f-mono text-right " + (fuerte ? "text-[var(--ink)] font-semibold" : "text-[var(--ink)]")}>{val}</span>
   </div>
+);
+
+const Chip = ({ children, onClick, activo, className = "" }) => (
+  <button onClick={onClick} className={"f-head tap-44 text-[11px] px-3.5 rounded-full border " + (activo ? "bg-[var(--ink)] text-[#F2F3F0] border-[var(--ink)] " : "bg-white text-[var(--ink)] border-[var(--line-strong)] active:bg-[rgba(22,33,28,.07)] ") + className}>{children}</button>
 );
 const Modal = ({ title, onClose, children }) => (
   <div className="fixed inset-0 z-50 bg-stone-900/60 flex items-end sm:items-center justify-center" onClick={onClose}>
@@ -288,7 +387,7 @@ function App() {
     <div className="min-h-screen text-stone-900 pb-24 lg:pb-0 lg:flex">
 
       {/* ---------- barra lateral, solo en pantalla grande ---------- */}
-      <aside className="hidden lg:flex lg:flex-col lg:w-60 lg:shrink-0 bg-stone-900 text-stone-100 lg:h-screen lg:sticky lg:top-0">
+      <aside className="hidden lg:flex lg:flex-col lg:w-60 lg:shrink-0 bg-[var(--ink)] text-[#F2F3F0] lg:h-screen lg:sticky lg:top-0">
         <div className="px-5 pt-6 pb-5 border-b border-stone-700">
           <div className="text-[11px] uppercase tracking-[0.2em] text-stone-400">Patas CR</div>
           <div className="text-[11px] text-stone-500">San Blas</div>
@@ -301,7 +400,7 @@ function App() {
             <button
               key={id}
               onClick={() => setTab(id)}
-              className={"w-full text-left px-5 py-2.5 text-sm border-l-2 " + (tab === id ? "border-amber-500 bg-stone-800 text-white font-medium" : "border-transparent text-stone-400 hover:text-stone-200")}
+              className={"w-full text-left px-5 py-2.5 text-sm border-l-2 " + (tab === id ? "border-[#F2F3F0] bg-[rgba(242,243,240,.12)] text-white font-medium" : "border-transparent text-stone-400 hover:text-stone-200")}
             >
               {l}
             </button>
@@ -316,16 +415,17 @@ function App() {
       <div className="lg:flex-1 lg:min-w-0">
 
         {/* ---------- encabezado, solo en móvil ---------- */}
-        <header className="lg:hidden bg-stone-900 text-stone-100 px-4 pt-4 pb-5 sticky top-0 z-30">
+        <header className="lg:hidden bg-[var(--surface)] border-b border-[var(--line-strong)] px-4 pt-3 pb-3 sticky top-0 z-30">
           <div className="flex items-baseline justify-between">
-            <span className="text-[11px] uppercase tracking-[0.2em] text-stone-400">Patas CR · San Blas</span>
-            <span className="text-[11px] text-stone-400 font-mono">{estado}</span>
+            <span className="f-head text-[10px] text-[var(--muted)]">Patas CR · San Blas</span>
+            <span className="f-head text-[10px] text-[var(--ink)]">{estado}</span>
           </div>
-          <div className="mt-2 flex items-end gap-3">
-            <div className="font-mono tabular-nums text-4xl tracking-tight">{C(totalHoy)}</div>
-            <div className="text-[11px] text-stone-400 pb-1.5 leading-tight">hoy<br />{nHoy} {nHoy === 1 ? "venta" : "ventas"}</div>
+          <div className="mt-1.5 flex items-baseline gap-2">
+            <span className="f-head text-[10px] text-[var(--muted)]">Hoy</span>
+            <span className="f-mono text-[16px]">+ {C(totalHoy)}</span>
+            <span className="text-[12px] text-[var(--muted)]">· {nHoy} {nHoy === 1 ? "venta" : "ventas"}</span>
           </div>
-          {gastoHoy > 0 && <div className="mt-1 font-mono tabular-nums text-[12px] text-stone-400">{C(gastoHoy)} pagados hoy en compras y gastos</div>}
+          {gastoHoy > 0 && <div className="mt-0.5 text-[12px] text-[var(--muted)]"><span className="f-mono">− {C(gastoHoy)}</span> en compras y gastos</div>}
         </header>
 
         <main className="px-3 pt-3 lg:px-8 lg:pt-7 lg:pb-10 max-w-3xl lg:max-w-6xl mx-auto">
@@ -359,11 +459,11 @@ function App() {
         </main>
       </div>
 
-      {toast && <div className="fixed bottom-24 lg:bottom-8 left-1/2 -translate-x-1/2 bg-stone-900 text-white text-sm px-4 py-2 rounded-full z-50 shadow-lg">{toast}</div>}
+      {toast && <div className="fixed bottom-[calc(var(--nav-h)+84px)] lg:bottom-8 left-1/2 -translate-x-1/2 bg-[var(--ink)] text-[#F2F3F0] text-sm px-4 py-2 rounded-full z-50 shadow-lg">{toast}</div>}
 
-      <nav className="lg:hidden fixed bottom-0 inset-x-0 bg-white border-t border-stone-300 grid grid-cols-6 z-40 pb-[env(safe-area-inset-bottom)]">
+      <nav className="lg:hidden fixed bottom-0 inset-x-0 bg-white border-t border-[var(--line-strong)] grid grid-cols-6 z-40 pb-[env(safe-area-inset-bottom)]">
         {TABS.map(([id,l]) => (
-          <button key={id} onClick={() => setTab(id)} className={"py-3 text-[10px] leading-tight font-medium border-t-2 " + (tab === id ? "border-amber-500 text-stone-900" : "border-transparent text-stone-500")}>{l}</button>
+          <button key={id} onClick={() => setTab(id)} className={"py-3 text-[10px] leading-tight font-medium border-t-2 " + (tab === id ? "border-[var(--signal)] text-[var(--ink)]" : "border-transparent text-[var(--muted)]")}>{l}</button>
         ))}
       </nav>
     </div>
@@ -476,6 +576,8 @@ function VentaForm({ ventas, gastos, precios, enlaces, cierres, cfg, guardar, av
   const [pago, setPago] = useState("Efectivo");
   const [importar, setImportar] = useState(false);
   const [cerrarCaja, setCerrarCaja] = useState(false);
+  const [verFecha, setVerFecha] = useState(false);
+  const montoRef = useRef(null);
 
   /* precio de referencia del último producto escrito */
   const refPrecio = useMemo(()=>{
@@ -494,83 +596,195 @@ function VentaForm({ ventas, gastos, precios, enlaces, cierres, cfg, guardar, av
   }, [ventas]);
 
   const delDia = ventas.filter((v) => v.fecha === fecha).sort((a,b)=>(b.creado||0)-(a.creado||0));
+  const totalDia = delDia.reduce((a,v)=>a+v.monto,0);
+  const esHoy = fecha === hoyISO();
+  const yaCerrado = (cierres || []).some((c)=>c.fecha === fecha);
+  const faltante = !monto ? "Falta el monto" : !prod.trim() ? "Falta el producto" : null;
+
+  /* los dígitos se asientan al escribir; React no vuelve a tocar className si no cambió */
+  const escribirMonto = (e) => {
+    setMonto(e.target.value);
+    const el = montoRef.current;
+    if (el) { el.classList.remove("asentar"); void el.offsetWidth; el.classList.add("asentar"); }
+  };
 
   const registrar = async () => {
     const m = num(monto);
     await guardar("ventas", { id: UID(), creado: Date.now(), fecha, producto: prod.trim(), monto: m, cliente: cliente.trim(), pago, usuario });
     setProd(""); setMonto(""); setCliente("");
-    aviso("Venta guardada · " + C(m));
+    aviso("Cobrado · " + C(m));
+    if (montoRef.current) montoRef.current.focus();
   };
 
   return (
-    <div>
-      <Card className="p-4 mb-3">
-        <div className="grid grid-cols-3 gap-2 mb-3">
-          <div className="col-span-2"><Lbl>Fecha</Lbl><Inp type="date" value={fecha} onChange={(e)=>setFecha(e.target.value)} className="font-mono" /></div>
-          <div><Lbl>Monto</Lbl><Inp inputMode="decimal" value={monto} onChange={(e)=>setMonto(e.target.value)} placeholder="0" className="font-mono tabular-nums text-lg" /></div>
+    <div className="pb-[calc(var(--nav-h)+84px)] lg:pb-0">
+
+      {/* ---------- contexto: la fecha va colapsada, casi siempre es hoy ---------- */}
+      <div className="flex items-center justify-between gap-3 mb-2.5 px-0.5">
+        <div className="flex items-center gap-2 min-w-0">
+          <Chip activo={!esHoy} onClick={()=>setVerFecha((v)=>!v)}>
+            {esHoy ? "Hoy" : titulo(nombreDia(fecha)).slice(0,3) + " " + fmtFecha(fecha)} {verFecha ? "▾" : "▸"}
+          </Chip>
+          <span className="text-[12px] text-[var(--muted)] truncate">
+            {delDia.length} {delDia.length === 1 ? "venta" : "ventas"}
+          </span>
         </div>
-        <div className="mb-3">
-          <Lbl>Producto</Lbl>
-          <Inp list="prods" value={prod} onChange={(e)=>setProd(e.target.value)} placeholder="Nutri salmon perro" />
-          <datalist id="prods">{productosPrev.map((p)=><option key={p} value={p} />)}</datalist>
-          {recientes.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 mt-2">
-              {recientes.map((p)=>(
-                <button key={p} onClick={()=>setProd(prod ? prod + " + " + p : p)} className="px-2 py-1 rounded-full border border-stone-300 bg-stone-50 text-[12px] active:bg-stone-200">{p}</button>
-              ))}
-            </div>
+        {!esHoy && <span className="f-head text-[10px] text-[var(--ink)] shrink-0">◐ Otra fecha</span>}
+      </div>
+
+      {verFecha && (
+        <Card className="p-3 mb-2.5">
+          <Lbl>Fecha del registro</Lbl>
+          <Inp type="date" value={fecha} onChange={(e)=>setFecha(e.target.value)} className="f-mono" />
+          {!esHoy && (
+            <Btn kind="ghost" className="w-full mt-2" onClick={()=>{ setFecha(hoyISO()); setVerFecha(false); }}>Volver a hoy</Btn>
           )}
-          <p className="text-[11px] text-stone-500 mt-1.5">Si lleva varias cosas, separalas con +</p>
-          {refPrecio && (
-            <div className="mt-2 bg-stone-100 rounded-md px-3 py-2">
-              <div className="text-[10px] uppercase tracking-wide text-stone-500 mb-0.5">{refPrecio.nombre}</div>
-              <div className="font-mono tabular-nums text-[13px]">
-                {refPrecio.precioKilo>0 && <span>{C(refPrecio.precioKilo)} por {refPrecio.unidad==="u" ? "unidad" : "kilo"}</span>}
-                {refPrecio.precioKilo>0 && refPrecio.precioSaco>0 && <span className="text-stone-400"> · </span>}
-                {refPrecio.precioSaco>0 && <span>{C(refPrecio.precioSaco)} el empaque de {refPrecio.peso}{refPrecio.unidad==="u" ? " u" : " kg"}</span>}
+        </Card>
+      )}
+
+      <Card className="p-3.5 mb-3">
+
+        {/* ---------- firma: el readout del monto ---------- */}
+        <div className="rounded-[12px] bg-[var(--readout)] px-4 pt-3 pb-4 mb-4">
+          <span className="f-head block text-[10px] text-[rgba(242,243,240,.5)] mb-2">Monto de la venta</span>
+          <div className="flex items-baseline gap-2.5">
+            <span className="f-mono text-[20px] leading-none text-[var(--muted)] select-none">₡</span>
+            <input
+              ref={montoRef}
+              className="readout-input"
+              inputMode="decimal"
+              value={monto}
+              onChange={escribirMonto}
+              placeholder="0"
+              aria-label="Monto de la venta"
+            />
+          </div>
+        </div>
+
+        {/* ---------- producto ---------- */}
+        <Lbl>Producto</Lbl>
+        <Inp list="prods" value={prod} onChange={(e)=>setProd(e.target.value)} placeholder="Nutri salmón perro" />
+        <datalist id="prods">{productosPrev.map((p)=><option key={p} value={p} />)}</datalist>
+
+        {recientes.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {recientes.map((p)=>(
+              <Chip key={p} onClick={()=>setProd(prod ? prod + " + " + p : p)}>{p}</Chip>
+            ))}
+          </div>
+        )}
+        <p className="text-[12px] text-[var(--muted)] mt-2">Si lleva varias cosas, separalas con +</p>
+
+        {/* ---------- precio de referencia: segundo en jerarquía, no una nota gris ---------- */}
+        {refPrecio && (
+          <div className="mt-2.5 rounded-[10px] border-2 border-[var(--ink)] bg-white px-3 py-2.5">
+            <div className="flex items-baseline justify-between gap-2 mb-2">
+              <span className="f-head text-[10px] text-[var(--muted)]">Precio en lista</span>
+              <span className="f-head text-[10px] text-[var(--ink)] truncate max-w-[62%] text-right">{refPrecio.nombre}</span>
+            </div>
+
+            {refPrecio.precioKilo > 0 && (
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="text-[12px] text-[var(--muted)]">por {refPrecio.unidad === "u" ? "unidad" : "kilo"}</span>
+                <span className="f-mono text-[17px]">{C(refPrecio.precioKilo)}</span>
               </div>
-            </div>
-          )}
-        </div>
-        <div className="mb-3">
+            )}
+
+            {refPrecio.precioSaco > 0 && (
+              <React.Fragment>
+                <div className="flex items-baseline justify-between gap-3 mt-1">
+                  <span className="text-[12px] text-[var(--muted)]">empaque de {refPrecio.peso}{refPrecio.unidad === "u" ? " u" : " kg"}</span>
+                  <span className="f-mono text-[17px]">{C(refPrecio.precioSaco)}</span>
+                </div>
+                <button
+                  onClick={()=>{ setMonto(String(refPrecio.precioSaco)); if (montoRef.current) montoRef.current.focus(); }}
+                  className="f-head tap-44 w-full mt-2 text-[10px] text-[var(--signal)] border border-[var(--line-strong)] rounded-[8px] active:bg-[rgba(11,93,138,.08)]">
+                  Cobrar el empaque completo
+                </button>
+              </React.Fragment>
+            )}
+          </div>
+        )}
+
+        {/* ---------- secundarios ---------- */}
+        <div className="mt-4">
           <Lbl>Cliente (opcional)</Lbl>
           <Inp list="clis" value={cliente} onChange={(e)=>setCliente(e.target.value)} placeholder="Daisy" />
           <datalist id="clis">{clientesPrev.map((c)=><option key={c} value={c} />)}</datalist>
         </div>
-        <Lbl>Pago</Lbl>
-        <div className="grid grid-cols-4 gap-1.5 mb-4">
-          {PAGOS.map((p)=>(
-            <button key={p} onClick={()=>setPago(p)} className={"py-2 rounded-md border text-[12px] " + (pago===p ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{p}</button>
-          ))}
+
+        <div className="mt-3">
+          <Lbl>Pago</Lbl>
+          <div className="grid grid-cols-4 gap-1.5">
+            {PAGOS.map((p)=>(
+              <button
+                key={p}
+                onClick={()=>setPago(p)}
+                aria-pressed={pago === p}
+                className={"f-head text-[10px] min-h-[48px] px-1 rounded-[8px] border " + (pago === p
+                  ? "bg-[var(--ink)] text-[#F2F3F0] border-[var(--ink)]"
+                  : "bg-white text-[var(--ink)] border-[var(--line-strong)] active:bg-[rgba(22,33,28,.07)]")}>
+                {p}
+              </button>
+            ))}
+          </div>
         </div>
-        <Btn kind="warn" className="w-full py-3 text-base" disabled={!prod.trim() || !monto} onClick={registrar}>Guardar venta</Btn>
       </Card>
 
-      <div className="flex justify-between items-baseline px-1 mb-2">
-        <span className="text-[11px] uppercase tracking-wide text-stone-500">{fecha === hoyISO() ? "Hoy" : titulo(nombreDia(fecha)) + " " + fmtFecha(fecha)}</span>
-        <div className="flex gap-3">
-          <button onClick={()=>setCerrarCaja(true)} className="text-[11px] text-stone-500 underline">Cerrar caja</button>
-          <button onClick={()=>setImportar(true)} className="text-[11px] text-stone-500 underline">Pegar desde el Sheets</button>
-        </div>
+      {/* ---------- ventas del día ---------- */}
+      <div className="flex items-baseline justify-between px-1 mb-2">
+        <span className="f-head text-[10px] text-[var(--muted)]">{esHoy ? "Ventas de hoy" : "Ventas del " + fmtFecha(fecha)}</span>
       </div>
 
-      {delDia.length === 0 ? <p className="text-sm text-stone-500 text-center py-6">Sin ventas en esta fecha.</p> : (
-        <Card className="divide-y divide-stone-100">
+      {delDia.length === 0 ? (
+        <Card className="px-4 py-7">
+          <p className="text-[14px] text-[var(--ink)]">{esHoy ? "Todavía no hay ventas hoy." : "No hay ventas anotadas en esta fecha."}</p>
+          <p className="text-[12px] text-[var(--muted)] mt-1">Anotá el monto arriba y tocá Cobrar.</p>
+        </Card>
+      ) : (
+        <Card className="divide-y divide-[var(--line)]">
           {delDia.map((v)=>(
-            <div key={v.id} className="px-3 py-2 flex justify-between items-center">
+            <div key={v.id} className="px-3 py-2.5 flex justify-between items-center gap-3">
               <div className="min-w-0">
-                <div className="text-sm truncate">{v.producto}</div>
-                <div className="text-[11px] text-stone-500">{[v.cliente, v.pago].filter(Boolean).join(" · ")}</div>
+                <div className="text-[14px] truncate">{v.producto}</div>
+                <div className="text-[11px] text-[var(--muted)]">{[v.cliente, v.pago].filter(Boolean).join(" · ")}</div>
               </div>
-              <span className="font-mono tabular-nums text-sm font-medium ml-2">{C(v.monto)}</span>
+              <Monto v={C(v.monto)} dir="in" className="text-[14px]" />
             </div>
           ))}
-          <div className="px-3 py-2 flex justify-between bg-stone-50">
-            <span className="text-sm font-medium">Total del día</span>
-            <span className="font-mono tabular-nums font-semibold">{C(delDia.reduce((a,v)=>a+v.monto,0))}</span>
+          <div className="px-3 py-3 flex justify-between items-baseline gap-3 bg-[var(--surface)]">
+            <span className="f-head text-[10px] text-[var(--muted)]">Total del día</span>
+            <Monto v={C(totalDia)} dir="in" className="text-[20px] font-semibold" />
           </div>
         </Card>
       )}
+
+      {/* ---------- cierre de caja: acción de primer nivel ---------- */}
+      <Card className="p-3 mt-3">
+        <div className="flex items-baseline justify-between gap-3 mb-2.5">
+          <span className="f-head text-[10px] text-[var(--muted)]">Cierre de caja</span>
+          <span className="text-[12px] text-[var(--ink)]">{yaCerrado ? "○ Ya cerrada" : "◐ Sin cerrar"}</span>
+        </div>
+        <Btn kind="ghost" className="w-full" onClick={()=>setCerrarCaja(true)}>Cerrar caja</Btn>
+      </Card>
+
+      <div className="text-center mt-3">
+        <button onClick={()=>setImportar(true)} className="tap-44 text-[12px] text-[var(--muted)] px-3">Pegar desde el Sheets</button>
+      </div>
+
+      {/* ---------- acción anclada, sobre el nav, en la zona del pulgar ---------- */}
+      <div
+        className="fixed inset-x-0 z-30 px-3 py-2.5 bg-[var(--surface)] border-t border-[var(--line-strong)] lg:static lg:px-0 lg:py-0 lg:mt-4 lg:bg-transparent lg:border-0"
+        style={{ bottom: "var(--nav-h)" }}>
+        <Btn kind="signal" className="btn-lg commit w-full" disabled={!!faltante} onClick={registrar}>
+          {faltante ? faltante : (
+            <span className="flex items-baseline gap-2.5">
+              <span>Cobrar</span>
+              <span className="f-mono text-[15px] normal-case tracking-normal">{C(num(monto))}</span>
+            </span>
+          )}
+        </Btn>
+      </div>
 
       {cerrarCaja && (
         <CierreModal
