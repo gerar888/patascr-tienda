@@ -2367,8 +2367,31 @@ function ImportPreciosModal({ onClose, onSave }) {
 }
 
 /* ================= ANÁLISIS ================= */
+/* comisión típica de datáfono en CR; ajustalo si tu contrato es otro */
+const COMISION_TARJETA = 2.5;
+
+const Hallazgo = ({ h }) => (
+  <div className="border-t border-[var(--line)] pt-3 mt-3 first:border-0 first:pt-0 first:mt-0">
+    <div className="flex items-baseline justify-between gap-3 mb-1">
+      <div className="flex items-baseline gap-2 min-w-0">
+        <span className="text-[13px] shrink-0">{h.sev}</span>
+        <span className="text-[15px] font-medium leading-snug">{h.titulo}</span>
+      </div>
+      <span className="f-mono text-[13px] shrink-0 text-right">
+        {h.plata == null ? "—" : C(Math.round(h.plata))}
+      </span>
+    </div>
+    <p className="text-[13px] text-[var(--muted)] leading-relaxed ml-[22px]">{h.detalle}</p>
+    <p className="text-[13px] leading-relaxed ml-[22px] mt-1.5">
+      <span className="f-head text-[10px] text-[var(--muted)] mr-1.5">Hacé</span>
+      {h.accion}
+    </p>
+  </div>
+);
+
 function Analisis({ ventas, gastos, precios, enlaces, cierres, cfg }) {
   const [mes, setMes] = useState(mesDe(hoyISO()));
+  const [verDatos, setVerDatos] = useState(false);
   const meses = useMemo(()=>[...new Set(ventas.map((v)=>mesDe(v.fecha)))].sort().reverse(), [ventas]);
   const vMes = ventas.filter((v)=>mesDe(v.fecha)===mes);
   const gMes = gastos.filter((g)=>mesDe(g.fecha)===mes);
@@ -2378,6 +2401,7 @@ function Analisis({ ventas, gastos, precios, enlaces, cierres, cfg }) {
   const diasMes = new Date(ay, am, 0).getDate();
   const esActual = mes === mesDe(hoyISO());
   const hastaDia = esActual ? new Date().getDate() : diasMes;
+  const diasRestantes = Math.max(0, diasMes - hastaDia);
 
   /* --- 1. acumulado vs ritmo necesario --- */
   const porDiaNum = useMemo(()=>{
@@ -2393,6 +2417,7 @@ function Analisis({ ventas, gastos, precios, enlaces, cierres, cfg }) {
   for (let d=1; d<=hastaDia; d++) ritmo.push(cfg.meta * d / diasMes);
   const etiquetasDias = Array.from({length: hastaDia}, (_,i)=> (i===0 || (i+1)%5===0) ? String(i+1) : "");
   const vsRitmo = acumulado.length ? acumulado[acumulado.length-1] - ritmo[ritmo.length-1] : 0;
+  const faltaMeta = Math.max(0, cfg.meta - total);
 
   /* --- 2. dispersión producto: venta vs margen --- */
   const an = useMemo(()=>analizarVentas(vMes, precios, enlaces), [vMes, precios, enlaces]);
@@ -2414,17 +2439,19 @@ function Analisis({ ventas, gastos, precios, enlaces, cierres, cfg }) {
     return o.length%2 ? o[h] : (o[h-1]+o[h])/2;
   })();
   const promedio = montos.length ? total/montos.length : 0;
+  const tiquete = mediana || promedio || 0;
 
-  /* --- 4. torta de medios de pago --- */
+  /* --- 4. medios de pago --- */
   const pagos = PAGOS.map((p)=>({ nombre: p, valor: vMes.filter((v)=>v.pago===p).reduce((a,v)=>a+v.monto,0) })).filter((x)=>x.valor>0);
+  const totPago = pagos.reduce((a,p)=>a+p.valor,0);
+  const valorPago = (n) => (pagos.find((p)=>p.nombre===n) || { valor: 0 }).valor;
 
   /* --- métricas extra --- */
   const porDiaSemana = useMemo(()=>{
-    const acum = Array(7).fill(0), cuenta = Array(7).fill(0);
+    const acum = Array(7).fill(0);
     vMes.forEach((v)=>{
       const [y,m,d] = v.fecha.split("-").map(Number);
-      const dw = new Date(y,m-1,d).getDay();
-      acum[dw] += v.monto;
+      acum[new Date(y,m-1,d).getDay()] += v.monto;
     });
     const diasVistos = Array(7).fill(0);
     [...new Set(vMes.map((v)=>v.fecha))].forEach((f)=>{
@@ -2438,6 +2465,7 @@ function Analisis({ ventas, gastos, precios, enlaces, cierres, cfg }) {
 
   const clientesMes = new Set(vMes.filter((v)=>v.cliente).map((v)=>norm(v.cliente)));
   const conNombre = vMes.filter((v)=>v.cliente).length;
+  const captura = vMes.length ? conNombre/vMes.length : 0;
   const repiten = useMemo(()=>{
     const c = {};
     vMes.filter((v)=>v.cliente).forEach((v)=>{ const k = norm(v.cliente); c[k] = (c[k]||0)+1; });
@@ -2453,114 +2481,314 @@ function Analisis({ ventas, gastos, precios, enlaces, cierres, cfg }) {
 
   const cierresMes = cierres.filter((c)=>mesDe(c.fecha)===mes);
   const difCaja = cierresMes.reduce((a,c)=>a+(c.diferencia||0),0);
+  const peorCierre = [...cierresMes].sort((a,b)=>Math.abs(b.diferencia||0)-Math.abs(a.diferencia||0))[0];
 
   const diasConVenta = new Set(vMes.map((v)=>v.fecha)).size;
   const mejorDia = Object.entries(porDiaNum).sort((a,b)=>b[1]-a[1])[0];
+  const margenReal = an.ventaId > 0 ? ((an.ventaId - an.costoId)/an.ventaId)*100 : 0;
+  const margenUso = margenReal > 0 ? margenReal : cfg.margenGranel;
+
+  /* productos con acción concreta de precio */
+  const bajoMeta = useMemo(()=>(
+    dispersion
+      .filter((p)=>p.pct < cfg.margenGranel)
+      .map((p)=>{
+        const necesaria = p.costo > 0 ? p.costo / (1 - cfg.margenGranel/100) : 0;
+        return { ...p, falta: p.venta*(cfg.margenGranel-p.pct)/100, subida: necesaria > 0 ? (necesaria/p.venta - 1)*100 : 0 };
+      })
+      .sort((a,b)=>b.falta-a.falta)
+  ), [dispersion, cfg.margenGranel]);
+
+  /* ================= motor de hallazgos ================= */
+  const hallazgos = useMemo(()=>{
+    const h = [];
+    if (vMes.length < 5) return h;
+
+    /* recompra */
+    if (captura < 0.6) {
+      h.push({
+        sev: "●", titulo: "No se puede medir si la gente está volviendo",
+        detalle: `Solo ${conNombre} de ${vMes.length} ventas llevan nombre (${Math.round(captura*100)}%). Con esa captura, el dato de recompra no es confiable, y la recompra es el negocio entero de una tienda de alimento.`,
+        accion: `Preguntá el nombre en toda venta de saco o de más de ${C(tiquete)}. Con dos semanas así ya se puede medir de verdad.`,
+        plata: clientesMes.size * tiquete * (margenUso/100) * 0.5,
+      });
+    } else if (clientesMes.size >= 5 && repiten/clientesMes.size < 0.25) {
+      const solos = clientesMes.size - repiten;
+      h.push({
+        sev: "●", titulo: "Casi nadie está volviendo",
+        detalle: `${clientesMes.size} clientes distintos y solo ${repiten} repitió. En un negocio donde el saco se acaba cada tres o cuatro semanas, eso significa que están comprando en otro lado la segunda vez.`,
+        accion: `Escribile por SINPE o WhatsApp a los ${solos} que compraron una sola vez, a los 25 días de su compra. Un mensaje, sin promoción.`,
+        plata: solos * tiquete * (margenUso/100),
+      });
+    }
+
+    /* datáfono vs SINPE */
+    const tar = valorPago("Tarjeta"), sin = valorPago("SINPE");
+    if (totPago > 0 && tar/totPago > 0.30) {
+      const mover = tar * 0.35;
+      h.push({
+        sev: tar/totPago > 0.45 ? "●" : "◐",
+        titulo: "Demasiado está pasando por el datáfono",
+        detalle: `Tarjeta ${C(tar)} (${Math.round(tar/totPago*100)}%) contra SINPE ${C(sin)} (${Math.round(sin/totPago*100)}%). La tarjeta cobra cerca de ${COMISION_TARJETA}% y tarda ${cfg.diasTarjeta} día${cfg.diasTarjeta===1?"":"s"} en acreditarse; SINPE no cobra nada y entra al instante.`,
+        accion: `Cuando saquen la tarjeta, ofrecé primero SINPE: preguntá «¿SINPE o tarjeta?» en ese orden. Tené el número visible en el mostrador.`,
+        plata: mover * (COMISION_TARJETA/100),
+      });
+    }
+
+    /* productos bajo meta */
+    if (bajoMeta.length && bajoMeta[0].falta > tiquete/2) {
+      const top = bajoMeta.slice(0,3);
+      h.push({
+        sev: "●", titulo: `${top.length} producto${top.length===1?"":"s"} se vende${top.length===1?"":"n"} bien y deja${top.length===1?"":"n"} poco`,
+        detalle: top.map((p)=>`${p.nombre}: ${C(p.venta)} vendidos al ${p.pct.toFixed(0)}% de margen`).join(" · ") + `. La meta de granel es ${cfg.margenGranel}%.`,
+        accion: `Subí ${top[0].nombre} un ${top[0].subida.toFixed(0)}% (queda en ${C(Math.round(top[0].venta*(1+top[0].subida/100)/Math.max(1,top[0].veces)))} por venta típica) o aceptá que es gancho y dejalo escrito.`,
+        plata: top.reduce((a,p)=>a+p.falta,0),
+      });
+    }
+
+    /* diferencias de caja */
+    if (Math.abs(difCaja) > tiquete) {
+      h.push({
+        sev: "●",
+        titulo: difCaja > 0 ? "Hay plata en caja que nadie anotó" : "Falta plata en caja",
+        detalle: difCaja > 0
+          ? `${C(Math.abs(difCaja))} de sobrante acumulado en ${cierresMes.length} cierre${cierresMes.length===1?"":"s"}. Un sobrante de ese tamaño casi nunca es error de conteo: es una venta que se cobró y no se registró.${peorCierre ? ` El más grande fue el ${fmtFecha(peorCierre.fecha)}.` : ""}`
+          : `${C(Math.abs(difCaja))} de faltante acumulado.${peorCierre ? ` El más grande fue el ${fmtFecha(peorCierre.fecha)}.` : ""}`,
+        accion: `Revisá el cierre${peorCierre ? " del " + fmtFecha(peorCierre.fecha) : ""} contra las ventas de ese día. Si aparece la venta, anotala con la fecha vieja.`,
+        plata: Math.abs(difCaja),
+      });
+    }
+
+    /* cierres pendientes */
+    const sinCerrar = Math.max(0, diasConVenta - cierresMes.length);
+    if (sinCerrar >= 2) {
+      h.push({
+        sev: "◐", titulo: `${sinCerrar} días con venta quedaron sin cerrar caja`,
+        detalle: `Se cerró ${cierresMes.length} de ${diasConVenta} días con movimiento. Sin cierre no hay forma de saber si la caja cuadra ni cuánto tocaba depositar.`,
+        accion: "Cerrá caja antes de bajar la cortina, no al día siguiente. Son dos minutos y es el único control de efectivo que existe.",
+        plata: null,
+      });
+    }
+
+    /* ritmo del mes */
+    if (esActual && faltaMeta > 0 && diasRestantes > 0) {
+      const porDia = faltaMeta/diasRestantes;
+      h.push({
+        sev: vsRitmo < 0 ? "◐" : "○",
+        titulo: vsRitmo < 0 ? "El mes va atrás del ritmo" : "El mes va en ritmo",
+        detalle: `Llevan ${C(total)} de ${C(cfg.meta)}. Quedan ${diasRestantes} días y faltan ${C(faltaMeta)}.`,
+        accion: `Hay que hacer ${C(porDia)} por día, o sea unas ${Math.ceil(porDia/Math.max(1,tiquete))} ventas diarias del tiquete típico.`,
+        plata: null,
+      });
+    }
+
+    /* cobertura de costos */
+    if (an.cobertura < 85 && an.sinLista.length) {
+      const top = an.sinLista.slice(0,3);
+      h.push({
+        sev: "◐", titulo: "Los márgenes de arriba son una estimación",
+        detalle: `Solo el ${an.cobertura.toFixed(0)}% de lo vendido calza con la tabla de precios. Sin enlazar: ${top.map((s)=>`${s.texto} (${C(s.monto)})`).join(" · ")}.`,
+        accion: "Enlazá esos nombres en la pestaña Precios. Cada uno que enlacés vuelve más real el número de margen.",
+        plata: null,
+      });
+    }
+
+    /* concentración */
+    if (conc > 60 && dispersion.length >= 4) {
+      h.push({
+        sev: "◐", titulo: "El mes depende de muy pocos productos",
+        detalle: `Los 3 más vendidos son el ${conc.toFixed(0)}% de todo lo identificado. Si a uno de esos proveedores se le acaba el producto, se cae buena parte del mes.`,
+        accion: "Tené un sustituto probado para cada uno de los tres, y no dejés que el inventario de esos baje de dos semanas.",
+        plata: null,
+      });
+    }
+
+    return h.sort((a,b)=>{
+      if ((a.plata==null) !== (b.plata==null)) return a.plata==null ? 1 : -1;
+      return (b.plata||0)-(a.plata||0);
+    });
+  }, [vMes, captura, conNombre, clientesMes, repiten, tiquete, margenUso, totPago, bajoMeta, difCaja, cierresMes, diasConVenta, esActual, faltaMeta, diasRestantes, vsRitmo, total, an, conc, dispersion, cfg]);
+
+  const plataTotal = hallazgos.reduce((a,h)=>a+(h.plata||0), 0);
+  const urgentes = hallazgos.filter((h)=>h.sev === "●");
+
+  const accionProducto = (p) => {
+    if (p.pct >= cfg.margenGranel + 5) return { s: "★", t: "Está bien. Empujalo." };
+    if (p.pct >= cfg.margenGranel) return { s: "○", t: "En meta." };
+    const b = bajoMeta.find((x)=>x.nombre === p.nombre);
+    if (b && b.subida > 0) return { s: "●", t: `Subir ${b.subida.toFixed(0)}%` };
+    return { s: "◐", t: "Revisar costo" };
+  };
 
   return (
     <div className="space-y-4">
       {meses.length>1 && (
         <div className="flex gap-2 overflow-x-auto pb-1">
-          {meses.map((m)=>(<button key={m} onClick={()=>setMes(m)} className={"px-3 py-1.5 rounded-full border text-xs whitespace-nowrap font-mono " + (mes===m ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{m}</button>))}
+          {meses.map((m)=>(
+            <Chip key={m} activo={mes===m} onClick={()=>setMes(m)} className="f-mono normal-case tracking-normal shrink-0">{m}</Chip>
+          ))}
         </div>
       )}
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <KPI k={vsRitmo>=0 ? "Adelante del ritmo" : "Atrás del ritmo"} v={C(Math.abs(vsRitmo))} sub={`meta ${C(cfg.meta)}`} oscuro />
-        <KPI k="Tiquete típico" v={C(mediana)} sub={`promedio ${C(promedio)}`} />
-        <KPI k="Días con venta" v={`${diasConVenta} de ${hastaDia}`} sub={mejorDia ? `mejor: día ${mejorDia[0]} con ${C(mejorDia[1])}` : ""} />
-        <KPI k="Top 3 productos" v={conc.toFixed(0)+"%"} sub="de lo vendido identificado" />
+      {/* ---------- el mes en tres números ---------- */}
+      <div className="grid grid-cols-3 gap-3">
+        <Card className="p-3">
+          <span className="f-head block text-[10px] text-[var(--muted)]">Vendido</span>
+          <div className="f-mono text-[18px] lg:text-[22px] font-semibold mt-0.5">{C(total)}</div>
+          <div className="text-[11px] text-[var(--muted)] mt-0.5">{cfg.meta ? Math.round(total/cfg.meta*100) : 0}% de {C(cfg.meta)}</div>
+        </Card>
+        <Card className="p-3">
+          <span className="f-head block text-[10px] text-[var(--muted)]">Tiquete típico</span>
+          <div className="f-mono text-[18px] lg:text-[22px] font-semibold mt-0.5">{C(mediana)}</div>
+          <div className="text-[11px] text-[var(--muted)] mt-0.5">{vMes.length} ventas</div>
+        </Card>
+        <Card className="p-3">
+          <span className="f-head block text-[10px] text-[var(--muted)]">Margen real</span>
+          <div className="f-mono text-[18px] lg:text-[22px] font-semibold mt-0.5">{margenReal.toFixed(0)}%</div>
+          <div className="text-[11px] text-[var(--muted)] mt-0.5">meta {cfg.margenGranel}% · cobertura {an.cobertura.toFixed(0)}%</div>
+        </Card>
       </div>
 
+      {/* ---------- decisiones ---------- */}
       <Card className="p-4">
-        <div className="flex justify-between items-baseline mb-2">
-          <span className="text-[11px] uppercase tracking-[0.15em] text-stone-500">Acumulado contra la meta</span>
-          <span className="font-mono tabular-nums text-[12px] text-stone-500">{vsRitmo>=0 ? "+" : "−"}{C(Math.abs(vsRitmo))} vs ritmo</span>
+        <div className="flex items-baseline justify-between gap-3 mb-3">
+          <span className="f-head text-[11px]">Qué hacer este mes</span>
+          {plataTotal > 0 && (
+            <span className="f-mono text-[12px] text-[var(--muted)]">{C(Math.round(plataTotal))} en juego</span>
+          )}
         </div>
-        <GraficoLinea
-          series={[
-            { nombre: "vendido", puntos: acumulado },
-            { nombre: "ritmo", puntos: ritmo, guia: true },
-          ]}
-          etiquetas={etiquetasDias}
-          yMax={Math.max(cfg.meta, ...acumulado) * 1.05}
-        />
-        <p className="text-[12px] text-stone-600 mt-2 leading-relaxed">
-          La línea gruesa es lo vendido acumulado; la punteada es el ritmo que hay que llevar para cerrar en {C(cfg.meta)}.
-          {vsRitmo >= 0
-            ? ` Van ${C(vsRitmo)} arriba de ese ritmo.`
-            : ` Faltan ${C(Math.abs(vsRitmo))} para estar en ritmo; con ${diasMes-hastaDia} días por delante hay que hacer ${C((cfg.meta - (acumulado[acumulado.length-1]||0)) / Math.max(1, diasMes-hastaDia))} por día.`}
-        </p>
+
+        {hallazgos.length === 0 ? (
+          <p className="text-[14px]">Todavía no hay ventas suficientes en este mes para sacar conclusiones. Con unas diez ventas ya empieza a decir algo.</p>
+        ) : (
+          <React.Fragment>
+            {hallazgos.map((h,i)=><Hallazgo key={i} h={h} />)}
+            <p className="text-[11px] text-[var(--muted)] leading-relaxed mt-4 pt-3 border-t border-[var(--line)]">
+              ● urge · ◐ conviene · ○ va bien · — sin plata directa asociada. La columna de la derecha es utilidad estimada al mes, no facturación.
+              {urgentes.length > 0 && ` Si solo vas a hacer una cosa, hacé la primera.`}
+            </p>
+          </React.Fragment>
+        )}
       </Card>
 
-      <Card className="p-4">
-        <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-1">Qué se vende contra cuánto deja</div>
-        <p className="text-[11px] text-stone-500 mb-2">Cada burbuja es un producto. Más a la derecha, más se vendió. Más arriba, mejor margen. El tamaño es cuántas veces se vendió.</p>
-        <GraficoDispersion puntos={dispersion} metaPct={cfg.margenGranel} />
-        <p className="text-[12px] text-stone-600 mt-2 leading-relaxed">
-          Las burbujas huecas están bajo la meta de {cfg.margenGranel}%. Las que están abajo a la derecha son las que más urge revisar: se venden mucho y dejan poco.
-        </p>
-      </Card>
-
-      <div className="grid lg:grid-cols-2 gap-4 items-start">
+      {/* ---------- productos con acción ---------- */}
+      {dispersion.length > 0 && (
         <Card className="p-4">
-          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-1">Tamaño de las ventas</div>
-          <p className="text-[11px] text-stone-500 mb-2">Cuántas ventas caen en cada rango, y cuánta plata representa cada uno.</p>
-          <Histograma valores={montos} cortes={CORTES} />
-          <p className="text-[12px] text-stone-600 mt-2 leading-relaxed">
-            El tiquete típico es {C(mediana)} y el promedio {C(promedio)}.
-            {promedio > mediana * 1.4
-              ? " El promedio va bastante arriba del típico: unas pocas ventas grandes lo están jalando. Para decidir, usá el típico."
-              : " Ambos números se parecen, así que las ventas son bastante parejas."}
-          </p>
-        </Card>
-
-        <Card className="p-4">
-          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-3">Cómo pagaron</div>
-          <Torta partes={pagos} />
-          <p className="text-[12px] text-stone-600 mt-3 leading-relaxed">
-            Lo que entra por SINPE y tarjeta llega solo al banco. El efectivo hay que cerrarlo y depositarlo a mano, así que entre más suba esa tajada, más disciplina de cierre se necesita.
-          </p>
-        </Card>
-      </div>
-
-      <div className="grid lg:grid-cols-2 gap-4 items-start">
-        <Card className="p-4">
-          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Qué día conviene más</div>
-          {porDiaSemana.map((d)=>{
-            const max = Math.max(...porDiaSemana.map((x)=>x.prom), 1);
-            return (
-              <div key={d.nombre} className="flex items-center gap-2 py-1">
-                <span className="text-[12px] w-20 shrink-0">{d.nombre}</span>
-                <div className="flex-1 h-3 bg-stone-200 rounded-sm overflow-hidden">
-                  <div className="h-full bg-stone-800" style={{ width: (d.prom/max*100)+"%" }} />
+          <span className="f-head block text-[11px] mb-1">Producto por producto</span>
+          <p className="text-[12px] text-[var(--muted)] mb-3">Ordenado por lo que vendió. La última columna es qué hacer con el precio.</p>
+          <div className="divide-y divide-[var(--line)]">
+            {[...dispersion].sort((a,b)=>b.venta-a.venta).slice(0,12).map((p)=>{
+              const a = accionProducto(p);
+              return (
+                <div key={p.nombre} className="py-2 flex items-baseline gap-3">
+                  <span className="text-[12px] w-4 shrink-0">{a.s}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[13px] truncate">{p.nombre}</div>
+                    <div className="text-[11px] text-[var(--muted)]">{p.veces} {p.veces===1?"vez":"veces"} · margen {p.pct.toFixed(0)}%</div>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <Monto v={C(p.venta)} className="text-[13px] block" />
+                    <span className="text-[11px] text-[var(--muted)]">{a.t}</span>
+                  </div>
                 </div>
-                <span className="font-mono tabular-nums text-[11px] w-20 text-right">{C(d.prom)}</span>
-              </div>
-            );
-          })}
-          <p className="text-[12px] text-stone-600 mt-2 leading-relaxed">
-            Promedio por día de semana. Sirve para decidir cuándo reforzar personal o cuándo programar promociones.
-          </p>
-        </Card>
-
-        <Card className="p-4">
-          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Señales del mes</div>
-          <div className="space-y-1">
-            <Linea label="Ventas con cliente anotado" val={`${conNombre} de ${vMes.length} · ${vMes.length ? Math.round(conNombre/vMes.length*100) : 0}%`} />
-            <Linea label="Clientes distintos" val={String(clientesMes.size)} />
-            <Linea label="Clientes que repitieron" val={String(repiten)} />
-            <Linea label="Cobertura de costos reales" val={an.cobertura.toFixed(0)+"%"} />
-            <Linea label="Días cerrados de caja" val={`${cierresMes.length} de ${hastaDia}`} />
-            <Linea label={difCaja===0 ? "Caja acumulada" : difCaja>0 ? "Sobrante de caja" : "Faltante de caja"} val={C(Math.abs(difCaja))} />
+              );
+            })}
           </div>
-          <p className="text-[12px] text-stone-600 mt-3 leading-relaxed">
-            {conNombre/Math.max(1,vMes.length) < 0.4
-              ? "◐ Menos de la mitad de las ventas lleva cliente anotado. Preguntar el nombre a los recurrentes es lo que habilita la lista de reactivación."
-              : "○ Buena captura de clientes: la lista de quién debería volver va a ser confiable."}
+          <p className="text-[11px] text-[var(--muted)] mt-3 leading-relaxed">
+            ★ sobre la meta · ○ en meta · ● bajo la meta, subir precio · ◐ falta costo para calcularlo.
           </p>
         </Card>
-      </div>
+      )}
+
+      {/* ---------- la evidencia, para el que quiera verificar ---------- */}
+      <Btn kind="ghost" className="w-full" onClick={()=>setVerDatos((v)=>!v)}>
+        {verDatos ? "Ocultar los datos detrás" : "Ver los datos detrás"}
+      </Btn>
+
+      {verDatos && (
+        <div className="space-y-4">
+          <Card className="p-4">
+            <div className="flex justify-between items-baseline mb-2">
+              <span className="f-head text-[11px] text-[var(--muted)]">Acumulado contra la meta</span>
+              <span className="f-mono text-[12px] text-[var(--muted)]">{vsRitmo>=0 ? "+" : "−"}{C(Math.abs(vsRitmo))} vs ritmo</span>
+            </div>
+            <GraficoLinea
+              series={[
+                { nombre: "vendido", puntos: acumulado },
+                { nombre: "ritmo", puntos: ritmo, guia: true },
+              ]}
+              etiquetas={etiquetasDias}
+              yMax={Math.max(cfg.meta, ...acumulado) * 1.05}
+            />
+            <p className="text-[12px] text-[var(--muted)] mt-2 leading-relaxed">
+              La línea gruesa es lo vendido acumulado; la punteada es el ritmo para cerrar en {C(cfg.meta)}.
+            </p>
+          </Card>
+
+          <Card className="p-4">
+            <span className="f-head block text-[11px] text-[var(--muted)] mb-1">Qué se vende contra cuánto deja</span>
+            <p className="text-[12px] text-[var(--muted)] mb-2">Cada burbuja es un producto. Más a la derecha, más se vendió. Más arriba, mejor margen.</p>
+            <GraficoDispersion puntos={dispersion} metaPct={cfg.margenGranel} />
+            <p className="text-[12px] text-[var(--muted)] mt-2 leading-relaxed">
+              Las huecas están bajo la meta. Las de abajo a la derecha son las de la lista de arriba.
+            </p>
+          </Card>
+
+          <div className="grid lg:grid-cols-2 gap-4 items-start">
+            <Card className="p-4">
+              <span className="f-head block text-[11px] text-[var(--muted)] mb-1">Tamaño de las ventas</span>
+              <Histograma valores={montos} cortes={CORTES} />
+              <p className="text-[12px] text-[var(--muted)] mt-2 leading-relaxed">
+                Típico {C(mediana)}, promedio {C(promedio)}.
+                {promedio > mediana * 1.4
+                  ? " El promedio va arriba del típico: unas pocas ventas grandes lo jalan. Para decidir, usá el típico."
+                  : " Se parecen, así que las ventas son parejas."}
+              </p>
+            </Card>
+
+            <Card className="p-4">
+              <span className="f-head block text-[11px] text-[var(--muted)] mb-3">Cómo pagaron</span>
+              <Torta partes={pagos} />
+            </Card>
+          </div>
+
+          <div className="grid lg:grid-cols-2 gap-4 items-start">
+            <Card className="p-4">
+              <span className="f-head block text-[11px] text-[var(--muted)] mb-2">Qué día conviene más</span>
+              {porDiaSemana.map((d)=>{
+                const max = Math.max(...porDiaSemana.map((x)=>x.prom), 1);
+                return (
+                  <div key={d.nombre} className="flex items-center gap-2 py-1">
+                    <span className="text-[12px] w-20 shrink-0">{d.nombre}</span>
+                    <div className="flex-1 h-3 bg-[rgba(22,33,28,.12)] rounded-sm overflow-hidden">
+                      <div className="h-full bg-[var(--ink)]" style={{ width: (d.prom/max*100)+"%" }} />
+                    </div>
+                    <span className="f-mono text-[11px] w-20 text-right">{C(d.prom)}</span>
+                  </div>
+                );
+              })}
+              <p className="text-[12px] text-[var(--muted)] mt-2 leading-relaxed">
+                Promedio por día. Sirve para decidir cuándo reforzar y cuándo no vale la pena abrir.
+              </p>
+            </Card>
+
+            <Card className="p-4">
+              <span className="f-head block text-[11px] text-[var(--muted)] mb-2">Señales del mes</span>
+              <div className="space-y-1">
+                <Linea label="Ventas con cliente anotado" val={`${conNombre} de ${vMes.length} · ${Math.round(captura*100)}%`} />
+                <Linea label="Clientes distintos" val={String(clientesMes.size)} />
+                <Linea label="Clientes que repitieron" val={String(repiten)} />
+                <Linea label="Cobertura de costos reales" val={an.cobertura.toFixed(0)+"%"} />
+                <Linea label="Días cerrados de caja" val={`${cierresMes.length} de ${diasConVenta}`} />
+                <Linea label={difCaja===0 ? "Caja acumulada" : difCaja>0 ? "Sobrante de caja" : "Faltante de caja"} val={C(Math.abs(difCaja))} />
+                <Linea label="Días con venta" val={`${diasConVenta} de ${hastaDia}`} />
+                <Linea label="Mejor día del mes" val={mejorDia ? `${mejorDia[0]} · ${C(mejorDia[1])}` : "—"} />
+                <Linea label="Salidas registradas" val={`${gMes.length} · ${C(gMes.reduce((a,g)=>a+g.monto,0))}`} />
+              </div>
+            </Card>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
