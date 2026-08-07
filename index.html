@@ -203,7 +203,7 @@ const num = (v) => {
 
 const CATS = ["Mercadería", "Empaque", "Alquiler", "Servicios", "Transporte", "Marketing", "Impuestos", "Otro"];
 const PAGOS = ["Efectivo", "SINPE", "Tarjeta", "Otro"];
-const CFG_DEF = { id: "general", meta: 140000, costoPct: 80, excluirDomingos: true, margenGranel: 20, margenSaco: 15, fondoCaja: 20000, saldoBanco: 0, diasTarjeta: 1 };
+const CFG_DEF = { id: "general", meta: 140000, costoPct: 80, excluirDomingos: true, margenGranel: 20, margenSaco: 15, fondoCaja: 20000, saldoBanco: 0, diasTarjeta: 1, inventarioIni: 0, semanasColchon: 4 };
 
 const margen = (precio, costo) => (precio > 0 ? ((precio - costo) / precio) * 100 : null);
 const partes = (t) => (t || "").split(/\s*\+\s*/).map((s) => s.trim()).filter(Boolean);
@@ -454,7 +454,7 @@ function App() {
           {tab === "historial" && <Historial ventas={ventas} gastos={gastos} guardar={guardar} borrar={borrar} aviso={aviso} />}
           {tab === "dinero" && <Dinero ventas={ventas} gastos={gastos} cierres={cierres} movs={movs} precios={precios} enlaces={enlaces} fijos={fijos} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={sesion.email} />}
           {tab === "analisis" && <Analisis ventas={ventas} gastos={gastos} precios={precios} enlaces={enlaces} cierres={cierres} cfg={cfg} />}
-          {tab === "precios" && <Precios precios={precios} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} />}
+          {tab === "precios" && <Precios precios={precios} enlaces={enlaces} gastos={gastos} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={usuario} />}
           {tab === "reportes" && <Reportes ventas={ventas} gastos={gastos} precios={precios} fijos={fijos} enlaces={enlaces} cierres={cierres} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} correo={sesion.email} />}
         </main>
       </div>
@@ -562,7 +562,7 @@ function Registrar({ ventas, gastos, fijos, precios, enlaces, cierres, cfg, guar
       <div className="lg:max-w-2xl">
       {modo === "venta"
         ? <VentaForm ventas={ventas} gastos={gastos} precios={precios} enlaces={enlaces} cierres={cierres} cfg={cfg} guardar={guardar} aviso={aviso} usuario={usuario} />
-        : <GastoForm gastos={gastos} fijos={fijos} guardar={guardar} borrar={borrar} aviso={aviso} usuario={usuario} />}
+        : <GastoForm gastos={gastos} fijos={fijos} precios={precios} enlaces={enlaces} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={usuario} />}
       </div>
     </div>
   );
@@ -984,13 +984,14 @@ function CierreModal({ fecha, ventas, gastos, cierres, cfg, guardar, usuario, av
 }
 
 /* ================= GASTOS ================= *//* ================= GASTOS ================= */
-function GastoForm({ gastos, fijos, guardar, borrar, aviso, usuario }) {
+function GastoForm({ gastos, fijos, precios, enlaces, cfg, guardar, borrar, aviso, usuario }) {
   const [fecha, setFecha] = useState(hoyISO());
   const [cat, setCat] = useState("Mercadería");
   const [detalle, setDetalle] = useState("");
   const [monto, setMonto] = useState("");
   const [pago, setPago] = useState("Efectivo");
   const [verFijos, setVerFijos] = useState(false);
+  const [factura, setFactura] = useState(false);
 
   const provPrev = useMemo(()=>[...new Set(gastos.map((g)=>g.detalle).filter(Boolean))].sort(), [gastos]);
   const delDia = gastos.filter((g)=>g.fecha === fecha);
@@ -1027,7 +1028,27 @@ function GastoForm({ gastos, fijos, guardar, borrar, aviso, usuario }) {
           ))}
         </div>
         <Btn kind="warn" className="w-full py-3 text-base" disabled={!monto} onClick={registrar}>Guardar salida</Btn>
+
+        <div className="mt-3 pt-3 border-t border-[var(--line)]">
+          <Btn kind="ghost" className="w-full" onClick={()=>setFactura(true)}>Cargar factura electrónica (XML)</Btn>
+          <p className="text-[11px] text-[var(--muted)] mt-1.5 leading-relaxed">
+            Para compras de mercadería: lee el XML del proveedor, registra el gasto y actualiza los costos sin digitar nada.
+          </p>
+        </div>
       </Card>
+
+      {factura && (
+        <FacturaXMLModal
+          precios={precios||[]}
+          enlaces={enlaces||[]}
+          gastos={gastos||[]}
+          cfg={cfg||{}}
+          guardar={guardar}
+          usuario={usuario}
+          aviso={aviso}
+          onClose={()=>setFactura(false)}
+        />
+      )}
 
       <div className="flex justify-between items-baseline px-1 mb-2">
         <span className="text-[11px] uppercase tracking-wide text-stone-500">{fecha === hoyISO() ? "Salidas de hoy" : "Salidas del " + fmtFecha(fecha)}</span>
@@ -1550,11 +1571,73 @@ const dentroDelCierre = (mov, cierre) => {
 const descTarjeta = (n) =>
   n <= 0 ? "" : n === 1 ? "las de hoy, entran en la madrugada" : `las de los últimos ${n} días`;
 
+function SocioModal({ modoIni, aportePend, sugerido, guardar, usuario, aviso, onClose }) {
+  const [modo, setModo] = useState(modoIni === "retiro" ? "retiro" : "aporte");
+  const [fecha, setFecha] = useState(hoyISO());
+  const [monto, setMonto] = useState("");
+  const [nota, setNota] = useState("");
+
+  const m = num(monto);
+  const listo = m > 0;
+  const esAporte = modo === "aporte";
+
+  const registrar = async () => {
+    await guardar("movimientos", {
+      id: UID(),
+      tipo: "ajuste",                       /* entra al saldo del banco como cualquier ajuste */
+      metodo: esAporte ? "aporte" : "retiro",
+      fecha,
+      monto: esAporte ? m : -m,
+      nota: (esAporte ? "Aporte de socio" : "Retiro de socio") + (nota.trim() ? " · " + nota.trim() : ""),
+      usuario,
+      creado: Date.now(),
+    });
+    aviso(esAporte ? "Aporte anotado · " + C(m) : "Retiro anotado · " + C(m));
+    onClose();
+  };
+
+  return (
+    <Modal title="Aporte o retiro de socio" onClose={onClose}>
+      <div className="grid grid-cols-2 gap-1.5 mb-3">
+        {[["aporte","Meto plata"],["retiro","Saco plata"]].map(([id,l])=>(
+          <button key={id} onClick={()=>setModo(id)}
+            className={"f-head text-[11px] min-h-[48px] rounded-[8px] border " + (modo===id
+              ? "bg-[var(--ink)] text-[#F2F3F0] border-[var(--ink)]"
+              : "bg-white text-[var(--ink)] border-[var(--line-strong)]")}>{l}</button>
+        ))}
+      </div>
+
+      <p className="text-[12px] text-[var(--muted)] leading-relaxed mb-3">
+        {esAporte
+          ? "Plata tuya que entra al negocio. Queda como deuda del negocio con vos y se descuenta de lo retirable hasta que se devuelva."
+          : aportePend > 0
+            ? `Primero se descuentan los ${C(aportePend)} que el negocio te debe; lo que pase de ahí es ganancia retirada.`
+            : `El reparto de este mes da ${C(Math.round(sugerido))} de margen para retirar.`}
+      </p>
+
+      <div className="mb-3"><Lbl>Fecha</Lbl>
+        <Inp type="date" value={fecha} onChange={(e)=>setFecha(e.target.value)} className="f-mono" />
+      </div>
+      <div className="mb-3"><Lbl>Monto</Lbl>
+        <Inp inputMode="decimal" value={monto} onChange={(e)=>setMonto(e.target.value)} placeholder="50000" className="f-mono" />
+      </div>
+      <div className="mb-4"><Lbl>Nota (opcional)</Lbl>
+        <Inp value={nota} onChange={(e)=>setNota(e.target.value)} placeholder="para completar la compra de alimento" />
+      </div>
+
+      <Btn kind="signal" className="btn-lg commit w-full" disabled={!listo} onClick={registrar}>
+        {listo ? (esAporte ? "Anotar aporte" : "Anotar retiro") : "Falta el monto"}
+      </Btn>
+    </Modal>
+  );
+}
+
 function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, guardar, borrar, aviso, usuario }) {
   const [mes, setMes] = useState(mesDe(hoyISO()));
   const [depositar, setDepositar] = useState(false);
   const [ajustar, setAjustar] = useState(false);
   const [auditar, setAuditar] = useState(false);
+  const [socio, setSocio] = useState(null);
 
   const fondo = cfg.fondoCaja || 0;
 
@@ -1626,6 +1709,30 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
   const flujoMes = saldoFin - saldoIni - ajMes;
   const enInventario = costoVendido - merca;
 
+  /* ---------- inventario acumulado y reparto de fin de mes ---------- */
+  const anTodo = useMemo(()=>analizarVentas(ventas, precios, enlaces), [ventas, precios, enlaces]);
+  const costoTodo = anTodo.costoId + anTodo.sinId * ((cfg.costoPct||80)/100);
+  const mercaTodo = gastos.filter((g)=>g.categoria==="Mercadería").reduce((a,g)=>a+g.monto,0);
+  const inventario = (cfg.inventarioIni||0) + mercaTodo - costoTodo;
+
+  /* costo diario de los últimos 30 días, para traducir el inventario a días de bodega */
+  const hace30 = useMemo(()=>{ const d = new Date(); d.setDate(d.getDate()-30); return d.toLocaleDateString("en-CA"); }, []);
+  const an30 = useMemo(()=>analizarVentas(ventas.filter((v)=>v.fecha>=hace30), precios, enlaces), [ventas, precios, enlaces, hace30]);
+  const costoDiario = (an30.costoId + an30.sinId * ((cfg.costoPct||80)/100)) / 30;
+  const diasInv = costoDiario > 0 ? inventario/costoDiario : null;
+
+  const aportes = movs.filter((m)=>m.metodo==="aporte").reduce((a,m)=>a+Math.abs(m.monto),0);
+  const devueltos = movs.filter((m)=>m.metodo==="retiro").reduce((a,m)=>a+Math.abs(m.monto),0);
+  const aportePend = Math.max(0, aportes - devueltos);
+
+  const fijosMensuales = (fijos||[]).reduce((a,f)=>a+f.monto,0);
+  const semanas = cfg.semanasColchon != null ? cfg.semanasColchon : 4;
+  const colchon = fijosMensuales * (semanas/4);
+  const reponer = Math.max(0, costoVendido - merca);
+  const comprometido = reponer + fijosMensuales + aportePend + colchon;
+  const libre = totalNegocio - comprometido;
+  const sugerido = Math.max(0, Math.min(libre, gananciaMes));
+
   /* cada movimiento que toca el banco, en orden, con saldo corriente */
   const libroBanco = useMemo(()=>{
     const items = [
@@ -1643,7 +1750,7 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
       })),
       ...movs.filter((m)=>m.tipo==="ajuste").map((m)=>({
         fecha: m.fecha, creado: m.creado||0, monto: m.monto,
-        que: m.metodo==="cuadre" ? "Cuadre manual" : "Ajuste manual", detalle: m.nota || "sin razón anotada", clase: "ajuste"
+        que: m.metodo==="aporte" ? "Aporte de socio" : m.metodo==="retiro" ? "Retiro de socio" : m.metodo==="cuadre" ? "Cuadre manual" : "Ajuste manual", detalle: m.nota || "sin razón anotada", clase: "ajuste"
       })),
     ].sort((a,b)=>(a.fecha<b.fecha?-1:a.fecha>b.fecha?1:(a.creado||0)-(b.creado||0)));
     let acum = cfg.saldoBanco||0;
@@ -1784,6 +1891,70 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
         </p>
       </Card>
 
+      <Card className="p-4">
+        <div className="flex justify-between items-baseline mb-1">
+          <span className="f-head text-[11px]">Reparto de fin de mes</span>
+          <span className="f-mono text-[12px] text-[var(--muted)]">{C(totalNegocio)} en total</span>
+        </div>
+        <p className="text-[12px] text-[var(--muted)] mb-3 leading-relaxed">
+          De toda la plata del negocio, cuánta ya tiene dueño y cuánta se puede sacar.
+        </p>
+
+        <div className="space-y-1">
+          <Linea label="Plata disponible hoy" val={C(totalNegocio)} fuerte />
+          <div className="pt-1.5 mt-1 border-t border-[var(--line)] space-y-1">
+            <Linea label="Reponer lo que se vendió y no se recompró" val={"− " + C(reponer)} />
+            <Linea label="Gastos fijos del mes que entra" val={"− " + C(fijosMensuales)} />
+            {aportePend > 0 && <Linea label="Devolver aportes de socios" val={"− " + C(aportePend)} />}
+            <Linea label={`Colchón de ${semanas} semanas`} val={"− " + C(colchon)} />
+          </div>
+          <div className="pt-2 mt-1 border-t border-[var(--line-strong)]">
+            <Linea label={libre >= 0 ? "Queda libre" : "● Falta para cubrir lo comprometido"} val={C(Math.abs(libre))} fuerte />
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-[10px] border-2 border-[var(--ink)] px-3 py-3">
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="f-head text-[10px] text-[var(--muted)]">Se puede retirar</span>
+            <span className="f-mono text-[22px] font-semibold">{C(Math.round(sugerido))}</span>
+          </div>
+          <p className="text-[12px] text-[var(--muted)] leading-relaxed mt-2">
+            {libre < 0
+              ? `No hay de dónde. Faltan ${C(Math.abs(libre))} para cubrir reposición, fijos y colchón. Este mes no se retira; si hace falta plata, entra como aporte y se anota.`
+              : sugerido <= 0
+                ? gananciaMes <= 0
+                  ? `Hay ${C(libre)} libres en el banco, pero el mes cerró ${gananciaMes < 0 ? "en pérdida" : "en cero"}. Esa plata es capital de trabajo, no ganancia: sacarla es descapitalizar la tienda.`
+                  : "No hay plata libre suficiente todavía."
+                : sugerido < gananciaMes
+                  ? `La ganancia del mes fue ${C(gananciaMes)}, pero solo ${C(Math.round(sugerido))} están disponibles en plata: el resto está en sacos en la bodega. Se retira lo que hay.`
+                  : `La ganancia del mes fue ${C(gananciaMes)} y está disponible en plata. Lo demás queda comprometido.`}
+          </p>
+          {sugerido > 0 && (
+            <Btn kind="ghost" className="w-full mt-3" onClick={()=>setSocio("retiro")}>Registrar retiro</Btn>
+          )}
+        </div>
+
+        <div className="mt-4 pt-3 border-t border-[var(--line)] space-y-1">
+          <Linea label="Inventario en bodega, a costo" val={C(Math.max(0, inventario))} />
+          <Linea
+            label="Alcanza para"
+            val={inventario > 0 && diasInv != null ? `${Math.round(diasInv)} días` : "—"}
+          />
+          {aportes > 0 && <Linea label="Aportes de socios, acumulado" val={C(aportes)} />}
+          {devueltos > 0 && <Linea label="Ya devuelto o retirado" val={C(devueltos)} />}
+        </div>
+
+        <p className="text-[12px] text-[var(--muted)] mt-3 leading-relaxed">
+          {inventario <= 0
+            ? "◐ El contador de inventario todavía no refleja la bodega real: arranca en cero y hay mercadería vieja vendiéndose sin haber entrado. Va a converger solo en cuatro a seis semanas, o podés poner el conteo en Ajustes."
+            : diasInv != null && diasInv > 60
+              ? `● Hay ${Math.round(diasInv)} días de inventario. Eso es plata parqueada en sacos: bajá el ritmo de compra hasta que llegue cerca de 45 días y esa plata vuelve al banco sola.`
+              : diasInv != null && diasInv < 15
+                ? `● Solo ${Math.round(diasInv)} días de inventario. Vas a quebrar existencias; conviene comprar antes de que se caiga una venta.`
+                : `○ Entre 15 y 60 días de inventario es sano para alimento. No hay plata de más parqueada.`}
+        </p>
+      </Card>
+
       <div className="grid lg:grid-cols-2 gap-4 items-start">
       <Card className="p-4">
         <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-3">Dónde está la plata</div>
@@ -1888,6 +2059,7 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
         {porDepositar <= 0 && <Btn className="flex-1 lg:flex-none" onClick={()=>setDepositar(true)}>Registrar depósito</Btn>}
         <Btn kind="ghost" className="flex-1 lg:flex-none" onClick={()=>setAuditar(true)}>Revisar el saldo</Btn>
         <Btn kind="ghost" className="flex-1 lg:flex-none" onClick={()=>setAjustar(true)}>Cuadrar banco</Btn>
+        <Btn kind="ghost" className="flex-1 lg:flex-none" onClick={()=>setSocio("aporte")}>Aporte o retiro</Btn>
       </div>
 
       {historial.length > 0 && (
@@ -1933,6 +2105,18 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
           onClose={()=>setAuditar(false)}
         />
       )}
+      {socio && (
+        <SocioModal
+          modoIni={socio}
+          aportePend={aportePend}
+          sugerido={sugerido}
+          guardar={guardar}
+          usuario={usuario}
+          aviso={aviso}
+          onClose={()=>setSocio(null)}
+        />
+      )}
+
       {ajustar && (
         <AjusteBancoModal
           banco={banco}
@@ -2204,9 +2388,331 @@ function AjusteBancoModal({ banco, bancoAcreditado, tarjetaPend, cfg, guardar, u
 }
 
 /* ================= PRECIOS ================= */
-function Precios({ precios, cfg, guardar, borrar, aviso }) {
+/* ================= factura electrónica (XML de Hacienda) ================= */
+/* Lee 4.3 y 4.4: busca los campos por nombre local, ignorando el espacio de nombres. */
+const nodo = (el, nombre) => {
+  for (const c of el.getElementsByTagName("*")) if (c.localName === nombre) return c;
+  return null;
+};
+const txt = (el, nombre) => { const n = el ? nodo(el, nombre) : null; return n ? (n.textContent||"").trim() : ""; };
+const numXML = (el, nombre) => { const v = txt(el, nombre); return v ? parseFloat(v) : 0; };
+
+function leerFacturaXML(texto, archivo) {
+  const doc = new DOMParser().parseFromString(texto, "application/xml");
+  if (doc.getElementsByTagName("parsererror").length) return { error: "El archivo no es un XML válido", archivo };
+
+  const raiz = doc.documentElement;
+  if (!raiz || !/Factura|Tiquete|Nota/i.test(raiz.localName)) return { error: "No parece un comprobante electrónico de Hacienda", archivo };
+
+  const emisorEl = nodo(raiz, "Emisor");
+  const emisor = emisorEl ? (txt(emisorEl, "NombreComercial") || txt(emisorEl, "Nombre")) : "Proveedor";
+  const resumen = nodo(raiz, "ResumenFactura");
+  const moneda = resumen ? (txt(resumen, "CodigoMoneda") || "CRC") : "CRC";
+
+  const lineas = [];
+  for (const el of raiz.getElementsByTagName("*")) {
+    if (el.localName !== "LineaDetalle") continue;
+    const cant = numXML(el, "Cantidad") || 1;
+    const neto = numXML(el, "SubTotal");                  /* después de descuento, antes de IVA */
+    const conIVA = numXML(el, "MontoTotalLinea") || neto; /* lo que realmente se paga */
+    const impEl = nodo(el, "Impuesto");
+    lineas.push({
+      n: txt(el, "NumeroLinea"),
+      codigo: txt(el, "Codigo"),
+      detalle: txt(el, "Detalle"),
+      cantidad: cant,
+      unidad: txt(el, "UnidadMedida"),
+      descuento: numXML(el, "MontoDescuento"),
+      tarifaIVA: impEl ? numXML(impEl, "Tarifa") : 0,
+      unitNeto: cant > 0 ? neto/cant : neto,
+      unitConIVA: cant > 0 ? conIVA/cant : conIVA,
+      neto, conIVA,
+    });
+  }
+  if (!lineas.length) return { error: "El comprobante no trae líneas de detalle", archivo };
+
+  return {
+    archivo,
+    clave: txt(raiz, "Clave"),
+    consecutivo: txt(raiz, "NumeroConsecutivo"),
+    fecha: (txt(raiz, "FechaEmision") || "").slice(0,10) || hoyISO(),
+    emisor, moneda, lineas,
+    totalNeto: resumen ? numXML(resumen, "TotalVentaNeta") : lineas.reduce((a,l)=>a+l.neto,0),
+    totalPagado: resumen ? numXML(resumen, "TotalComprobante") : lineas.reduce((a,l)=>a+l.conIVA,0),
+  };
+}
+
+/* «[4L] NS S-M Puppy Dog» → sugiere el artículo más parecido de la lista de precios */
+function sugerirArticulo(detalle, precios) {
+  const limpio = norm(detalle.replace(/\[[^\]]*\]/g, " "));
+  const toks = limpio.split(" ").filter((t)=>t.length>2);
+  if (!toks.length) return null;
+  let mejor = null, mejorPtj = 0;
+  precios.forEach((p)=>{
+    const pn = norm(p.nombre);
+    let ptj = 0;
+    toks.forEach((t)=>{ if (pn.includes(t)) ptj += t.length; });
+    if (ptj > mejorPtj) { mejorPtj = ptj; mejor = p; }
+  });
+  return mejorPtj >= 5 ? mejor : null;
+}
+
+function FacturaXMLModal({ precios, enlaces, gastos, cfg, guardar, usuario, aviso, onClose }) {
+  const [facturas, setFacturas] = useState([]);
+  const [errores, setErrores] = useState([]);
+  const [mapa, setMapa] = useState({});        /* clave|linea → productoId | "" (ignorar) */
+  const [pago, setPago] = useState("Transferencia");
+  const [conIVA, setConIVA] = useState(!!cfg.ivaEnCosto);
+  const [guardando, setGuardando] = useState(false);
+  const inputRef = useRef(null);
+
+  const yaImportada = (clave) => gastos.some((g)=>g.facturaClave && g.facturaClave === clave);
+
+  const cargar = async (files) => {
+    const oks = [], mal = [];
+    for (const f of Array.from(files)) {
+      const t = await f.text();
+      const r = leerFacturaXML(t, f.name);
+      if (r.error) mal.push(r); else oks.push(r);
+    }
+    /* prellenar el mapeo: primero los enlaces guardados, si no una sugerencia por nombre */
+    const m = {};
+    oks.forEach((fa)=>fa.lineas.forEach((l,i)=>{
+      const porCodigo = enlaces.find((e)=>e.id === norm("cod:" + fa.emisor + ":" + l.codigo));
+      const porTexto = enlaces.find((e)=>e.id === norm(l.detalle));
+      const guardado = porCodigo || porTexto;
+      if (guardado) m[fa.clave+"|"+i] = guardado.ignorar ? "" : guardado.productoId;
+      else { const s = sugerirArticulo(l.detalle, precios); if (s) m[fa.clave+"|"+i] = s.id; }
+    }));
+    setFacturas((prev)=>[...prev, ...oks.filter((o)=>!prev.some((p)=>p.clave===o.clave))]);
+    setMapa((prev)=>({ ...m, ...prev }));
+    setErrores(mal);
+  };
+
+  const costoDe = (l) => conIVA ? l.unitConIVA : l.unitNeto;
+  const nuevas = facturas.filter((f)=>!yaImportada(f.clave));
+  const totalGasto = nuevas.reduce((a,f)=>a+f.totalPagado, 0);
+
+  /* cambios de costo que se van a aplicar */
+  const cambios = useMemo(()=>{
+    const out = [];
+    nuevas.forEach((f)=>f.lineas.forEach((l,i)=>{
+      const pid = mapa[f.clave+"|"+i];
+      if (!pid) return;
+      const p = precios.find((x)=>x.id === pid);
+      if (!p) return;
+      const antes = num(p.costo), ahora = costoDe(l);
+      const peso = num(p.peso) || 0;
+      const ckAhora = peso > 0 ? ahora/peso : 0;
+      out.push({
+        f, l, p, antes, ahora,
+        delta: antes > 0 ? (ahora/antes - 1)*100 : null,
+        sugSaco: ahora/(1 - (cfg.margenSaco||15)/100),
+        sugKilo: ckAhora > 0 ? ckAhora/(1 - (cfg.margenGranel||20)/100) : 0,
+        desfasado: peso > 0 && num(p.precioKilo) > 0 && margen(num(p.precioKilo), ckAhora) < (cfg.margenGranel||20),
+      });
+    }));
+    return out;
+  }, [nuevas, mapa, precios, conIVA, cfg]);
+
+  const sinEnlazar = nuevas.reduce((a,f)=>a + f.lineas.filter((l,i)=>mapa[f.clave+"|"+i] === undefined).length, 0);
+
+  const confirmar = async () => {
+    setGuardando(true);
+    try {
+      for (const f of nuevas) {
+        await guardar("gastos", {
+          id: UID(), creado: Date.now(), fecha: f.fecha,
+          categoria: "Mercadería",
+          detalle: f.emisor + " · factura " + f.consecutivo.slice(-8),
+          monto: f.totalPagado, pago, usuario,
+          facturaClave: f.clave,
+          lineas: f.lineas.map((l,i)=>({
+            detalle: l.detalle, codigo: l.codigo, cantidad: l.cantidad,
+            unitNeto: l.unitNeto, unitConIVA: l.unitConIVA,
+            productoId: mapa[f.clave+"|"+i] || "",
+          })),
+        });
+        /* recordar el mapeo para la próxima factura del mismo proveedor */
+        for (let i=0; i<f.lineas.length; i++) {
+          const l = f.lineas[i], pid = mapa[f.clave+"|"+i];
+          if (pid === undefined) continue;
+          await guardar("enlaces", {
+            id: norm("cod:" + f.emisor + ":" + l.codigo),
+            texto: f.emisor + " · " + l.detalle,
+            productoId: pid || "", ignorar: !pid,
+          });
+        }
+      }
+      /* aplicar los costos nuevos, uno por artículo (el último gana) */
+      const porProducto = {};
+      cambios.forEach((c)=>{ porProducto[c.p.id] = c; });
+      for (const c of Object.values(porProducto)) {
+        await guardar("precios", { ...c.p, costo: Math.round(c.ahora*100)/100 });
+      }
+      aviso(nuevas.length + (nuevas.length===1 ? " factura cargada" : " facturas cargadas"));
+      onClose();
+    } catch (e) {
+      aviso("No se pudo guardar: " + (e.message || "error"));
+      setGuardando(false);
+    }
+  };
+
+  return (
+    <Modal title="Cargar factura electrónica" onClose={onClose}>
+      {facturas.length === 0 && (
+        <React.Fragment>
+          <p className="text-[13px] leading-relaxed mb-3">
+            Subí el archivo <span className="f-mono">.XML</span> que le llega en el correo junto con el PDF. El XML es la factura de verdad y trae cada línea con su costo exacto; del PDF habría que adivinar.
+          </p>
+          <button
+            onClick={()=>inputRef.current && inputRef.current.click()}
+            className="w-full border-2 border-dashed border-[var(--line-strong)] rounded-[10px] py-8 f-head text-[11px] text-[var(--muted)]">
+            Escoger archivos XML
+          </button>
+        </React.Fragment>
+      )}
+      <input ref={inputRef} type="file" accept=".xml,text/xml,application/xml" multiple style={{display:"none"}}
+        onChange={(e)=>{ cargar(e.target.files); e.target.value = ""; }} />
+
+      {errores.length > 0 && (
+        <div className="border border-[var(--attention)] rounded-[8px] p-3 mb-3">
+          {errores.map((x,i)=>(<div key={i} className="text-[12px]">● {x.archivo}: {x.error}</div>))}
+        </div>
+      )}
+
+      {facturas.map((f)=>{
+        const repetida = yaImportada(f.clave);
+        return (
+          <div key={f.clave} className="border border-[var(--line-strong)] rounded-[10px] p-3 mb-3">
+            <div className="flex justify-between items-baseline gap-2 mb-1">
+              <span className="f-head text-[10px] truncate">{f.emisor}</span>
+              <span className="f-mono text-[11px] text-[var(--muted)] shrink-0">{fmtFecha(f.fecha)}</span>
+            </div>
+            <div className="flex justify-between items-baseline gap-2 mb-2">
+              <span className="text-[11px] text-[var(--muted)]">Factura …{f.consecutivo.slice(-8)} · {f.lineas.length} líneas</span>
+              <span className="f-mono text-[13px]">{C(f.totalPagado)}</span>
+            </div>
+
+            {repetida && (
+              <p className="text-[12px] border border-[var(--attention)] rounded-[8px] p-2 mb-2">
+                ◐ Esta factura ya se había cargado antes. Se va a ignorar para no duplicar el gasto.
+              </p>
+            )}
+            {f.moneda !== "CRC" && (
+              <p className="text-[12px] border border-[var(--attention)] rounded-[8px] p-2 mb-2">
+                ● Viene en {f.moneda}, no en colones. Los montos se van a guardar tal cual, sin convertir.
+              </p>
+            )}
+
+            {!repetida && f.lineas.map((l,i)=>{
+              const pid = mapa[f.clave+"|"+i];
+              const p = pid ? precios.find((x)=>x.id===pid) : null;
+              const antes = p ? num(p.costo) : 0;
+              const ahora = costoDe(l);
+              const delta = antes > 0 ? (ahora/antes - 1)*100 : null;
+              return (
+                <div key={i} className="py-2 border-t border-[var(--line)]">
+                  <div className="flex justify-between items-baseline gap-2">
+                    <span className="text-[13px] truncate">{l.detalle}</span>
+                    <span className="f-mono text-[12px] shrink-0">{l.cantidad} × {C(ahora)}</span>
+                  </div>
+                  <div className="mt-1.5 flex gap-1.5 items-center">
+                    <select
+                      value={pid === undefined ? "?" : pid}
+                      onChange={(e)=>setMapa({ ...mapa, [f.clave+"|"+i]: e.target.value === "?" ? undefined : e.target.value })}
+                      className="flex-1 min-w-0 px-2 min-h-[44px] rounded-[8px] border border-[var(--line-strong)] bg-white text-[13px]">
+                      <option value="?">— sin decidir —</option>
+                      <option value="">No es artículo de la lista</option>
+                      {precios.map((x)=>(<option key={x.id} value={x.id}>{x.nombre}</option>))}
+                    </select>
+                  </div>
+                  {p && (
+                    <div className="mt-1 text-[11px] text-[var(--muted)] leading-relaxed">
+                      {antes > 0
+                        ? <React.Fragment>
+                            {delta !== null && Math.abs(delta) >= 1
+                              ? <span>{delta > 0 ? "● Subió" : "○ Bajó"} {Math.abs(delta).toFixed(1)}% · antes {C(antes)}</span>
+                              : <span>○ Igual que la compra anterior</span>}
+                          </React.Fragment>
+                        : <span>◐ Primer costo registrado para este artículo</span>}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+
+      {facturas.length > 0 && (
+        <React.Fragment>
+          <button onClick={()=>inputRef.current && inputRef.current.click()}
+            className="f-head tap-44 w-full text-[10px] text-[var(--muted)] border border-[var(--line-strong)] rounded-[8px] mb-3">
+            Agregar otra factura
+          </button>
+
+          <div className="mb-3">
+            <Lbl>Costo que se guarda</Lbl>
+            <div className="grid grid-cols-2 gap-1.5">
+              {[[false,"Sin IVA"],[true,"Con IVA"]].map(([v,l])=>(
+                <button key={String(v)} onClick={()=>setConIVA(v)}
+                  className={"f-head text-[10px] min-h-[48px] rounded-[8px] border " + (conIVA===v
+                    ? "bg-[var(--ink)] text-[#F2F3F0] border-[var(--ink)]"
+                    : "bg-white text-[var(--ink)] border-[var(--line-strong)]")}>{l}</button>
+              ))}
+            </div>
+            <p className="text-[11px] text-[var(--muted)] mt-1.5 leading-relaxed">
+              Si acreditás el IVA en la declaración, el costo real es sin IVA. Si no lo acreditás, el costo es con IVA. El gasto siempre se registra por el total pagado, {C(totalGasto)}.
+            </p>
+          </div>
+
+          <div className="mb-3">
+            <Lbl>Cómo se pagó</Lbl>
+            <div className="grid grid-cols-4 gap-1.5">
+              {PAGOS.map((x)=>(
+                <button key={x} onClick={()=>setPago(x)}
+                  className={"f-head text-[10px] min-h-[48px] rounded-[8px] border " + (pago===x
+                    ? "bg-[var(--ink)] text-[#F2F3F0] border-[var(--ink)]"
+                    : "bg-white text-[var(--ink)] border-[var(--line-strong)]")}>{x}</button>
+              ))}
+            </div>
+          </div>
+
+          <div className="border border-[var(--line-strong)] rounded-[10px] p-3 mb-3 space-y-1">
+            <Linea label="Facturas nuevas" val={String(nuevas.length)} />
+            <Linea label="Se registra como gasto de Mercadería" val={C(totalGasto)} />
+            <Linea label="Artículos a los que se les actualiza el costo" val={String(new Set(cambios.map((c)=>c.p.id)).size)} />
+            {sinEnlazar > 0 && <Linea label="◐ Líneas sin decidir" val={String(sinEnlazar)} />}
+          </div>
+
+          {cambios.some((c)=>c.desfasado) && (
+            <div className="border-2 border-[var(--ink)] rounded-[10px] p-3 mb-3">
+              <div className="f-head text-[10px] mb-2">Precios que quedan bajo la meta</div>
+              {cambios.filter((c)=>c.desfasado).map((c,i)=>(
+                <div key={i} className="text-[12px] leading-relaxed mb-1.5">
+                  ● <span className="font-medium">{c.p.nombre}</span> — para volver al {cfg.margenGranel}% habría que vender el kilo a <span className="f-mono">{C(c.sugKilo)}</span>
+                  {num(c.p.precioKilo) > 0 && <span className="text-[var(--muted)]"> (hoy {C(num(c.p.precioKilo))})</span>}
+                  {c.sugSaco > 0 && <span className="text-[var(--muted)]"> · empaque {C(c.sugSaco)}</span>}
+                </div>
+              ))}
+              <p className="text-[11px] text-[var(--muted)] mt-2">Los precios de venta no se cambian solos. Esto es para que decidás vos, en Precios.</p>
+            </div>
+          )}
+
+          <Btn kind="signal" className="btn-lg commit w-full" disabled={nuevas.length===0 || guardando} onClick={confirmar}>
+            {guardando ? "Guardando…" : nuevas.length === 0 ? "Nada nuevo que cargar" : "Cargar y actualizar costos"}
+          </Btn>
+        </React.Fragment>
+      )}
+    </Modal>
+  );
+}
+
+function Precios({ precios, enlaces, gastos, cfg, guardar, borrar, aviso, usuario }) {
   const [q, setQ] = useState(""); const [edit, setEdit] = useState(null);
   const [imp, setImp] = useState(false); const [soloBajos, setSoloBajos] = useState(false);
+  const [factura, setFactura] = useState(false);
 
   const dups = useMemo(()=>{
     const c = {}; precios.forEach((p)=>(c[norm(p.nombre)] = (c[norm(p.nombre)]||0)+1));
@@ -2228,6 +2734,7 @@ function Precios({ precios, cfg, guardar, borrar, aviso }) {
       <div className="flex gap-2 mb-3">
         <Btn className="flex-1" onClick={()=>setEdit({ nuevo:true })}>+ Artículo</Btn>
         <Btn kind="ghost" className="flex-1" onClick={()=>setImp(true)}>Pegar tabla</Btn>
+        <Btn kind="ghost" className="flex-1" onClick={()=>setFactura(true)}>Factura XML</Btn>
       </div>
 
       {precios.length === 0 ? (
@@ -2284,6 +2791,18 @@ function Precios({ precios, cfg, guardar, borrar, aviso }) {
         onSave={async (np)=>{ await guardar("precios", np); setEdit(null); aviso("Artículo guardado"); }}
         onDelete={async (id)=>{ await borrar("precios", id); setEdit(null); aviso("Artículo eliminado"); }} />}
 
+      {factura && (
+        <FacturaXMLModal
+          precios={precios}
+          enlaces={enlaces||[]}
+          gastos={gastos||[]}
+          cfg={cfg}
+          guardar={guardar}
+          usuario={usuario}
+          aviso={aviso}
+          onClose={()=>setFactura(false)}
+        />
+      )}
       {imp && <ImportPreciosModal onClose={()=>setImp(false)} onSave={async (filas)=>{
         await window.FB.guardarLote("precios", filas);
         setImp(false); aviso(filas.length + " artículos cargados");
@@ -3270,6 +3789,16 @@ function AjustesModal({ cfg, guardar, onClose }) {
       <div className="grid grid-cols-2 gap-3 mb-3">
         <div><Lbl>Margen meta granel (%)</Lbl><Inp inputMode="decimal" value={f.margenGranel} onChange={(e)=>setF({...f, margenGranel:num(e.target.value)})} className="font-mono" /></div>
         <div><Lbl>Margen meta saco (%)</Lbl><Inp inputMode="decimal" value={f.margenSaco} onChange={(e)=>setF({...f, margenSaco:num(e.target.value)})} className="font-mono" /></div>
+      </div>
+      <div className="mb-3">
+        <Lbl>Inventario en bodega al empezar a contarlo</Lbl>
+        <Inp inputMode="decimal" value={f.inventarioIni||0} onChange={(e)=>setF({...f, inventarioIni:num(e.target.value)})} className="font-mono" />
+        <p className="text-[11px] text-stone-500 mt-1">A precio de costo. Si lo dejás en cero, el contador arranca desde hoy y va a quedar corto unas semanas, hasta que se venda la mercadería vieja.</p>
+      </div>
+      <div className="mb-3">
+        <Lbl>Colchón, en semanas de gastos fijos</Lbl>
+        <Inp inputMode="decimal" value={f.semanasColchon != null ? f.semanasColchon : 4} onChange={(e)=>setF({...f, semanasColchon:num(e.target.value)})} className="font-mono" />
+        <p className="text-[11px] text-stone-500 mt-1">Plata que se deja quieta y no cuenta como ganancia retirable. Cuatro semanas es un mes de operación pagado por adelantado.</p>
       </div>
       <div className="mb-4">
         <Lbl>Proyección</Lbl>
