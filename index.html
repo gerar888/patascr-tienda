@@ -454,7 +454,7 @@ function App() {
           {tab === "historial" && <Historial ventas={ventas} gastos={gastos} guardar={guardar} borrar={borrar} aviso={aviso} />}
           {tab === "dinero" && <Dinero ventas={ventas} gastos={gastos} cierres={cierres} movs={movs} precios={precios} enlaces={enlaces} fijos={fijos} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={sesion.email} />}
           {tab === "analisis" && <Analisis ventas={ventas} gastos={gastos} precios={precios} enlaces={enlaces} cierres={cierres} cfg={cfg} />}
-          {tab === "precios" && <Precios precios={precios} enlaces={enlaces} gastos={gastos} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={usuario} />}
+          {tab === "precios" && <Precios precios={precios} enlaces={enlaces} gastos={gastos} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={sesion.email} />}
           {tab === "reportes" && <Reportes ventas={ventas} gastos={gastos} precios={precios} fijos={fijos} enlaces={enlaces} cierres={cierres} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} correo={sesion.email} />}
         </main>
       </div>
