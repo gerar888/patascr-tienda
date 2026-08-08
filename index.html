@@ -203,7 +203,7 @@ const num = (v) => {
 
 const CATS = ["Mercadería", "Empaque", "Alquiler", "Servicios", "Transporte", "Marketing", "Impuestos", "Otro"];
 const PAGOS = ["Efectivo", "SINPE", "Tarjeta", "Otro"];
-const CFG_DEF = { id: "general", meta: 140000, costoPct: 80, excluirDomingos: true, margenGranel: 20, margenSaco: 15, fondoCaja: 20000, saldoBanco: 0, diasTarjeta: 1, inventarioIni: 0, semanasColchon: 4, costoSinIVA: true, tarifaIVA: 13 };
+const CFG_DEF = { id: "general", meta: 140000, costoPct: 80, excluirDomingos: true, margenGranel: 20, margenSaco: 15, fondoCaja: 20000, saldoBanco: 0, diasTarjeta: 1, inventarioIni: 0, semanasColchon: 4, costoSinIVA: true, tarifaIVA: 13, gananciaDef: 20 };
 
 /* ---------- convención única de IVA ----------
    Los costos se guardan SIN IVA (así vienen en el XML y así se acreditan).
@@ -1005,7 +1005,6 @@ function GastoForm({ gastos, fijos, precios, enlaces, cfg, guardar, borrar, avis
   const [monto, setMonto] = useState("");
   const [pago, setPago] = useState("Efectivo");
   const [verFijos, setVerFijos] = useState(false);
-  const [factura, setFactura] = useState(false);
 
   const provPrev = useMemo(()=>[...new Set(gastos.map((g)=>g.detalle).filter(Boolean))].sort(), [gastos]);
   const delDia = gastos.filter((g)=>g.fecha === fecha);
@@ -1043,26 +1042,7 @@ function GastoForm({ gastos, fijos, precios, enlaces, cfg, guardar, borrar, avis
         </div>
         <Btn kind="warn" className="w-full py-3 text-base" disabled={!monto} onClick={registrar}>Guardar salida</Btn>
 
-        <div className="mt-3 pt-3 border-t border-[var(--line)]">
-          <Btn kind="ghost" className="w-full" onClick={()=>setFactura(true)}>Cargar factura electrónica (XML)</Btn>
-          <p className="text-[11px] text-[var(--muted)] mt-1.5 leading-relaxed">
-            Para compras de mercadería: lee el XML del proveedor, registra el gasto y actualiza los costos sin digitar nada.
-          </p>
-        </div>
       </Card>
-
-      {factura && (
-        <FacturaXMLModal
-          precios={precios||[]}
-          enlaces={enlaces||[]}
-          gastos={gastos||[]}
-          cfg={cfg||{}}
-          guardar={guardar}
-          usuario={usuario}
-          aviso={aviso}
-          onClose={()=>setFactura(false)}
-        />
-      )}
 
       <div className="flex justify-between items-baseline px-1 mb-2">
         <span className="text-[11px] uppercase tracking-wide text-stone-500">{fecha === hoyISO() ? "Salidas de hoy" : "Salidas del " + fmtFecha(fecha)}</span>
@@ -2402,490 +2382,180 @@ function AjusteBancoModal({ banco, bancoAcreditado, tarjetaPend, cfg, guardar, u
 }
 
 /* ================= PRECIOS ================= */
-/* ================= factura electrónica (XML de Hacienda) ================= */
-/* Lee 4.3 y 4.4: busca los campos por nombre local, ignorando el espacio de nombres. */
-const nodo = (el, nombre) => {
-  for (const c of el.getElementsByTagName("*")) if (c.localName === nombre) return c;
-  return null;
-};
-const txt = (el, nombre) => { const n = el ? nodo(el, nombre) : null; return n ? (n.textContent||"").trim() : ""; };
-const numXML = (el, nombre) => { const v = txt(el, nombre); return v ? parseFloat(v) : 0; };
+/* redondeo comercial: al múltiplo de 25 más cercano */
+const red25 = (n) => Math.round(n/25)*25;
 
-function leerFacturaXML(texto, archivo) {
-  const doc = new DOMParser().parseFromString(texto, "application/xml");
-  if (doc.getElementsByTagName("parsererror").length) return { error: "El archivo no es un XML válido", archivo };
+/* la ganancia se aplica SOBRE EL COSTO, como en la hoja: costo × (1 + g/100) */
+const conGanancia = (costo, g) => costo * (1 + (g||0)/100);
 
-  const raiz = doc.documentElement;
-  if (!raiz || !/Factura|Tiquete|Nota/i.test(raiz.localName)) return { error: "No parece un comprobante electrónico de Hacienda", archivo };
-
-  const emisorEl = nodo(raiz, "Emisor");
-  const emisor = emisorEl ? (txt(emisorEl, "NombreComercial") || txt(emisorEl, "Nombre")) : "Proveedor";
-  const resumen = nodo(raiz, "ResumenFactura");
-  const moneda = resumen ? (txt(resumen, "CodigoMoneda") || "CRC") : "CRC";
-
-  const lineas = [];
-  for (const el of raiz.getElementsByTagName("*")) {
-    if (el.localName !== "LineaDetalle") continue;
-    const cant = numXML(el, "Cantidad") || 1;
-    const neto = numXML(el, "SubTotal");                  /* después de descuento, antes de IVA */
-    const conIVA = numXML(el, "MontoTotalLinea") || neto; /* lo que realmente se paga */
-    const impEl = nodo(el, "Impuesto");
-    lineas.push({
-      n: txt(el, "NumeroLinea"),
-      codigo: txt(el, "Codigo"),
-      detalle: txt(el, "Detalle"),
-      cantidad: cant,
-      unidad: txt(el, "UnidadMedida"),
-      descuento: numXML(el, "MontoDescuento"),
-      tarifaIVA: impEl ? numXML(impEl, "Tarifa") : 0,
-      unitNeto: cant > 0 ? neto/cant : neto,
-      unitConIVA: cant > 0 ? conIVA/cant : conIVA,
-      neto, conIVA,
-    });
-  }
-  if (!lineas.length) return { error: "El comprobante no trae líneas de detalle", archivo };
-
-  return {
-    archivo,
-    clave: txt(raiz, "Clave"),
-    consecutivo: txt(raiz, "NumeroConsecutivo"),
-    fecha: (txt(raiz, "FechaEmision") || "").slice(0,10) || hoyISO(),
-    emisor, moneda, lineas,
-    totalNeto: resumen ? numXML(resumen, "TotalVentaNeta") : lineas.reduce((a,l)=>a+l.neto,0),
-    totalPagado: resumen ? numXML(resumen, "TotalComprobante") : lineas.reduce((a,l)=>a+l.conIVA,0),
-  };
-}
-
-/* «[4L] NS S-M Puppy Dog» → sugiere el artículo más parecido de la lista de precios */
-function sugerirArticulo(detalle, precios) {
-  const limpio = norm(detalle.replace(/\[[^\]]*\]/g, " "));
-  const toks = limpio.split(" ").filter((t)=>t.length>2);
-  if (!toks.length) return null;
-  let mejor = null, mejorPtj = 0;
-  precios.forEach((p)=>{
-    const pn = norm(p.nombre);
-    let ptj = 0;
-    toks.forEach((t)=>{ if (pn.includes(t)) ptj += t.length; });
-    if (ptj > mejorPtj) { mejorPtj = ptj; mejor = p; }
-  });
-  return mejorPtj >= 5 ? mejor : null;
-}
-
-/* «[4L] NS S-M Puppy Dog» → nombre sin el corchete de presentación */
-const nombreDesdeDetalle = (d) => (d||"").replace(/\[[^\]]*\]/g, " ").replace(/\s+/g," ").trim();
-
-/* intenta leer el contenido del corchete y pasarlo a kg. Siempre queda editable. */
-const contenidoDesdeDetalle = (d) => {
-  const m = (d||"").match(/\[\s*([\d.,]+)\s*([a-zA-Z]+)\s*\]/);
-  if (!m) return { peso: "", unidad: "kg", seguro: false };
-  const n = parseFloat(m[1].replace(",", "."));
-  if (!isFinite(n) || n <= 0) return { peso: "", unidad: "kg", seguro: false };
-  const u = m[2].toLowerCase();
-  if (u === "kg")             return { peso: String(n), unidad: "kg", seguro: true };
-  if (u === "g" || u === "gr") return { peso: String(Math.round(n/10)/100), unidad: "kg", seguro: true };
-  if (u === "lb" || u === "lbs" || u === "l") return { peso: String(Math.round(n*453.6)/1000), unidad: "kg", seguro: false };
-  if (u === "oz")             return { peso: String(Math.round(n*28.35)/1000), unidad: "kg", seguro: false };
-  return { peso: "", unidad: "u", seguro: false };
-};
-
-function FacturaXMLModal({ precios, enlaces, gastos, cfg, guardar, usuario, aviso, onClose }) {
-  const [facturas, setFacturas] = useState([]);
-  const [errores, setErrores] = useState([]);
-  const [mapa, setMapa] = useState({});        /* clave|linea → productoId | "" (ignorar) */
-  const [pago, setPago] = useState("Transferencia");
-  const costoConIVA = cfg.costoSinIVA === false;   /* la convención vive en Ajustes, no acá */
-  const [guardando, setGuardando] = useState(false);
-  const [nuevos, setNuevos] = useState({});   /* artículos que se crean desde la factura */
-  const inputRef = useRef(null);
-
-  /* la lista de precios más los que se están creando en esta misma pantalla */
-  const catalogo = useMemo(()=>[...precios, ...Object.values(nuevos)], [precios, nuevos]);
-  const buscar = (id) => catalogo.find((x)=>x.id === id);
-
-  const crearDesdeLinea = (clave, i, l) => {
-    const c = contenidoDesdeDetalle(l.detalle);
-    const art = {
-      id: UID(), nombre: nombreDesdeDetalle(l.detalle) || l.detalle,
-      peso: c.peso, unidad: c.unidad, costo: 0, precioKilo: "", precioSaco: "",
-      _nuevo: true, _dudoso: !c.seguro,
-    };
-    setNuevos((prev)=>({ ...prev, [clave+"|"+i]: art }));
-    setMapa((prev)=>({ ...prev, [clave+"|"+i]: art.id }));
-  };
-  const editarNuevo = (k, campo, valor) => setNuevos((prev)=>({ ...prev, [k]: { ...prev[k], [campo]: valor } }));
-
-  const yaImportada = (clave) => gastos.some((g)=>g.facturaClave && g.facturaClave === clave);
-
-  const cargar = async (files) => {
-    const oks = [], mal = [];
-    for (const f of Array.from(files)) {
-      const t = await f.text();
-      const r = leerFacturaXML(t, f.name);
-      if (r.error) mal.push(r); else oks.push(r);
-    }
-    /* prellenar el mapeo: primero los enlaces guardados, si no una sugerencia por nombre */
-    const m = {};
-    oks.forEach((fa)=>fa.lineas.forEach((l,i)=>{
-      const porCodigo = enlaces.find((e)=>e.id === norm("cod:" + fa.emisor + ":" + l.codigo));
-      const porTexto = enlaces.find((e)=>e.id === norm(l.detalle));
-      const guardado = porCodigo || porTexto;
-      if (guardado) m[fa.clave+"|"+i] = guardado.ignorar ? "" : guardado.productoId;
-      else { const s = sugerirArticulo(l.detalle, precios); if (s) m[fa.clave+"|"+i] = s.id; }
-    }));
-    setFacturas((prev)=>[...prev, ...oks.filter((o)=>!prev.some((p)=>p.clave===o.clave))]);
-    setMapa((prev)=>({ ...m, ...prev }));
-    setErrores(mal);
-  };
-
-  const costoDe = (l) => costoConIVA ? l.unitConIVA : l.unitNeto;
-  const nuevas = facturas.filter((f)=>!yaImportada(f.clave));
-  const totalGasto = nuevas.reduce((a,f)=>a+f.totalPagado, 0);
-
-  /* cambios de costo que se van a aplicar */
-  const cambios = useMemo(()=>{
-    const out = [];
-    nuevas.forEach((f)=>f.lineas.forEach((l,i)=>{
-      const pid = mapa[f.clave+"|"+i];
-      if (!pid) return;
-      const p = buscar(pid);
-      if (!p) return;
-      const antes = num(p.costo), ahora = costoDe(l);
-      const peso = num(p.peso) || 0;
-      const ckAhora = peso > 0 ? ahora/peso : 0;
-      out.push({
-        f, l, p, antes, ahora,
-        delta: antes > 0 ? (ahora/antes - 1)*100 : null,
-        sugSaco: conIVA(ahora/(1 - (cfg.margenSaco||15)/100)),
-        sugKilo: ckAhora > 0 ? conIVA(ckAhora/(1 - (cfg.margenGranel||20)/100)) : 0,
-        desfasado: peso > 0 && num(p.precioKilo) > 0 && margen(num(p.precioKilo), ckAhora) < (cfg.margenGranel||20),
-      });
-    }));
-    return out;
-  }, [nuevas, mapa, catalogo, costoConIVA, cfg]);
-
-  const sinEnlazar = nuevas.reduce((a,f)=>a + f.lineas.filter((l,i)=>mapa[f.clave+"|"+i] === undefined).length, 0);
-  const nuevosUsados = Object.entries(nuevos).filter(([k,a])=>mapa[k] === a.id);
-  const nuevosIncompletos = nuevosUsados.filter(([k,a])=>!a.nombre.trim() || num(a.peso) <= 0);
-
-  const confirmar = async () => {
-    setGuardando(true);
-    try {
-      for (const f of nuevas) {
-        await guardar("gastos", {
-          id: UID(), creado: Date.now(), fecha: f.fecha,
-          categoria: "Mercadería",
-          detalle: f.emisor + " · factura " + f.consecutivo.slice(-8),
-          monto: f.totalPagado, pago, usuario,
-          facturaClave: f.clave,
-          lineas: f.lineas.map((l,i)=>({
-            detalle: l.detalle, codigo: l.codigo, cantidad: l.cantidad,
-            unitNeto: l.unitNeto, unitConIVA: l.unitConIVA,
-            productoId: mapa[f.clave+"|"+i] || "",
-          })),
-        });
-        /* recordar el mapeo para la próxima factura del mismo proveedor */
-        for (let i=0; i<f.lineas.length; i++) {
-          const l = f.lineas[i], pid = mapa[f.clave+"|"+i];
-          if (pid === undefined) continue;
-          await guardar("enlaces", {
-            id: norm("cod:" + f.emisor + ":" + l.codigo),
-            texto: f.emisor + " · " + l.detalle,
-            productoId: pid || "", ignorar: !pid,
-          });
-        }
-      }
-      /* aplicar los costos nuevos, uno por artículo (el último gana) */
-      const porProducto = {};
-      cambios.forEach((c)=>{ porProducto[c.p.id] = c; });
-      for (const c of Object.values(porProducto)) {
-        const { _nuevo, _dudoso, ...art } = c.p;
-        await guardar("precios", { ...art, costo: Math.round(c.ahora*100)/100 });
-      }
-      aviso(nuevas.length + (nuevas.length===1 ? " factura cargada" : " facturas cargadas"));
-      onClose();
-    } catch (e) {
-      aviso("No se pudo guardar: " + (e.message || "error"));
-      setGuardando(false);
-    }
-  };
-
+/* celda editable: guarda al salir del campo, no en cada tecla */
+function Celda({ valor, onGuardar, ancho = "w-24", mono = true, alinear = "text-right", placeholder = "" }) {
+  const [v, setV] = useState(valor == null ? "" : String(valor));
+  const [tocado, setTocado] = useState(false);
+  useEffect(()=>{ if (!tocado) setV(valor == null ? "" : String(valor)); }, [valor, tocado]);
   return (
-    <Modal title="Cargar factura electrónica" onClose={onClose}>
-      {facturas.length === 0 && (
-        <React.Fragment>
-          <p className="text-[13px] leading-relaxed mb-3">
-            Subí el archivo <span className="f-mono">.XML</span> que le llega en el correo junto con el PDF. El XML es la factura de verdad y trae cada línea con su costo exacto; del PDF habría que adivinar.
-          </p>
-          <button
-            onClick={()=>inputRef.current && inputRef.current.click()}
-            className="w-full border-2 border-dashed border-[var(--line-strong)] rounded-[10px] py-8 f-head text-[11px] text-[var(--muted)]">
-            Escoger archivos XML
-          </button>
-        </React.Fragment>
-      )}
-      <input ref={inputRef} type="file" accept=".xml,text/xml,application/xml" multiple style={{display:"none"}}
-        onChange={(e)=>{ cargar(e.target.files); e.target.value = ""; }} />
-
-      {errores.length > 0 && (
-        <div className="border border-[var(--attention)] rounded-[8px] p-3 mb-3">
-          {errores.map((x,i)=>(<div key={i} className="text-[12px]">● {x.archivo}: {x.error}</div>))}
-        </div>
-      )}
-
-      {facturas.map((f)=>{
-        const repetida = yaImportada(f.clave);
-        return (
-          <div key={f.clave} className="border border-[var(--line-strong)] rounded-[10px] p-3 mb-3">
-            <div className="flex justify-between items-baseline gap-2 mb-1">
-              <span className="f-head text-[10px] truncate">{f.emisor}</span>
-              <span className="f-mono text-[11px] text-[var(--muted)] shrink-0">{fmtFecha(f.fecha)}</span>
-            </div>
-            <div className="flex justify-between items-baseline gap-2 mb-2">
-              <span className="text-[11px] text-[var(--muted)]">Factura …{f.consecutivo.slice(-8)} · {f.lineas.length} líneas</span>
-              <span className="f-mono text-[13px]">{C(f.totalPagado)}</span>
-            </div>
-
-            {repetida && (
-              <p className="text-[12px] border border-[var(--attention)] rounded-[8px] p-2 mb-2">
-                ◐ Esta factura ya se había cargado antes. Se va a ignorar para no duplicar el gasto.
-              </p>
-            )}
-            {f.moneda !== "CRC" && (
-              <p className="text-[12px] border border-[var(--attention)] rounded-[8px] p-2 mb-2">
-                ● Viene en {f.moneda}, no en colones. Los montos se van a guardar tal cual, sin convertir.
-              </p>
-            )}
-
-            {!repetida && f.lineas.map((l,i)=>{
-              const pid = mapa[f.clave+"|"+i];
-              const p = pid ? buscar(pid) : null;
-              const nuevo = nuevos[f.clave+"|"+i] && mapa[f.clave+"|"+i] === nuevos[f.clave+"|"+i].id ? nuevos[f.clave+"|"+i] : null;
-              const antes = p ? num(p.costo) : 0;
-              const ahora = costoDe(l);
-              const delta = antes > 0 ? (ahora/antes - 1)*100 : null;
-              return (
-                <div key={i} className="py-2 border-t border-[var(--line)]">
-                  <div className="flex justify-between items-baseline gap-2">
-                    <span className="text-[13px] truncate">{l.detalle}</span>
-                    <span className="f-mono text-[12px] shrink-0">{l.cantidad} × {C(ahora)}</span>
-                  </div>
-                  <div className="mt-1.5 flex gap-1.5 items-center">
-                    <select
-                      value={pid === undefined ? "?" : pid}
-                      onChange={(e)=>{
-                        const v = e.target.value;
-                        if (v === "+") { crearDesdeLinea(f.clave, i, l); return; }
-                        setMapa({ ...mapa, [f.clave+"|"+i]: v === "?" ? undefined : v });
-                      }}
-                      className="flex-1 min-w-0 px-2 min-h-[44px] rounded-[8px] border border-[var(--line-strong)] bg-white text-[13px]">
-                      <option value="?">— sin decidir —</option>
-                      <option value="+">+ Crear artículo nuevo</option>
-                      <option value="">No es artículo de la lista</option>
-                      {catalogo.map((x)=>(<option key={x.id} value={x.id}>{x.nombre}{x._nuevo ? " (nuevo)" : ""}</option>))}
-                    </select>
-                  </div>
-                  {nuevo && (
-                    <div className="mt-2 rounded-[8px] border-2 border-[var(--ink)] p-2.5">
-                      <div className="f-head text-[10px] text-[var(--muted)] mb-2">Artículo nuevo</div>
-                      <Inp value={nuevo.nombre} onChange={(e)=>editarNuevo(f.clave+"|"+i, "nombre", e.target.value)} placeholder="Nombre como lo llamás vos" />
-                      <div className="grid grid-cols-2 gap-2 mt-2">
-                        <div>
-                          <Lbl>Contenido</Lbl>
-                          <Inp inputMode="decimal" value={nuevo.peso} onChange={(e)=>editarNuevo(f.clave+"|"+i, "peso", e.target.value)} className="f-mono" placeholder="15" />
-                        </div>
-                        <div>
-                          <Lbl>Unidad</Lbl>
-                          <button onClick={()=>editarNuevo(f.clave+"|"+i, "unidad", nuevo.unidad === "kg" ? "u" : "kg")}
-                            className="f-mono w-full min-h-[48px] px-3 rounded-[8px] border border-[var(--line-strong)] bg-white text-[14px]">
-                            {nuevo.unidad === "kg" ? "kg" : "unid."}
-                          </button>
-                        </div>
-                      </div>
-                      <p className="text-[11px] text-[var(--muted)] mt-2 leading-relaxed">
-                        {nuevo._dudoso && nuevo.peso
-                          ? `◐ Saqué ${nuevo.peso} kg del código del proveedor, pero puede estar mal. Verificalo contra el empaque.`
-                          : num(nuevo.peso) > 0
-                            ? `○ Costo por ${nuevo.unidad === "kg" ? "kilo" : "unidad"}: ${C(ahora/num(nuevo.peso))}`
-                            : "● Falta el contenido. Sin eso no se puede calcular el costo por kilo."}
-                      </p>
-                    </div>
-                  )}
-                  {p && !nuevo && (
-                    <div className="mt-1 text-[11px] text-[var(--muted)] leading-relaxed">
-                      {antes > 0
-                        ? <React.Fragment>
-                            {delta !== null && Math.abs(delta) >= 1
-                              ? <span>{delta > 0 ? "● Subió" : "○ Bajó"} {Math.abs(delta).toFixed(1)}% · antes {C(antes)}</span>
-                              : <span>○ Igual que la compra anterior</span>}
-                          </React.Fragment>
-                        : <span>◐ Primer costo registrado para este artículo</span>}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        );
-      })}
-
-      {facturas.length > 0 && (
-        <React.Fragment>
-          <button onClick={()=>inputRef.current && inputRef.current.click()}
-            className="f-head tap-44 w-full text-[10px] text-[var(--muted)] border border-[var(--line-strong)] rounded-[8px] mb-3">
-            Agregar otra factura
-          </button>
-
-          <div className="border border-[var(--line-strong)] rounded-[10px] p-3 mb-3">
-            <div className="flex justify-between items-baseline gap-3">
-              <span className="f-head text-[10px] text-[var(--muted)]">Costo que se guarda</span>
-              <span className="f-head text-[10px]">{costoConIVA ? "Con IVA" : "Sin IVA"}</span>
-            </div>
-            <p className="text-[11px] text-[var(--muted)] mt-1.5 leading-relaxed">
-              Siempre el mismo criterio, en todas las facturas y todos los artículos. Se cambia en Ajustes, no acá, para que nunca queden costos mezclados. El gasto se registra por el total pagado, {C(totalGasto)}.
-            </p>
-          </div>
-
-          <div className="mb-3">
-            <Lbl>Cómo se pagó</Lbl>
-            <div className="grid grid-cols-4 gap-1.5">
-              {PAGOS.map((x)=>(
-                <button key={x} onClick={()=>setPago(x)}
-                  className={"f-head text-[10px] min-h-[48px] rounded-[8px] border " + (pago===x
-                    ? "bg-[var(--ink)] text-[#F2F3F0] border-[var(--ink)]"
-                    : "bg-white text-[var(--ink)] border-[var(--line-strong)]")}>{x}</button>
-              ))}
-            </div>
-          </div>
-
-          <div className="border border-[var(--line-strong)] rounded-[10px] p-3 mb-3 space-y-1">
-            <Linea label="Facturas nuevas" val={String(nuevas.length)} />
-            <Linea label="Se registra como gasto de Mercadería" val={C(totalGasto)} />
-            <Linea label="Artículos a los que se les actualiza el costo" val={String(new Set(cambios.map((c)=>c.p.id)).size)} />
-            {nuevosUsados.length > 0 && <Linea label="Artículos que se crean" val={String(nuevosUsados.length)} />}
-            {sinEnlazar > 0 && <Linea label="◐ Líneas sin decidir" val={String(sinEnlazar)} />}
-            {nuevosIncompletos.length > 0 && <Linea label="● Artículos nuevos sin contenido" val={String(nuevosIncompletos.length)} />}
-          </div>
-
-          {cambios.some((c)=>c.desfasado) && (
-            <div className="border-2 border-[var(--ink)] rounded-[10px] p-3 mb-3">
-              <div className="f-head text-[10px] mb-2">Precios que quedan bajo la meta</div>
-              {cambios.filter((c)=>c.desfasado).map((c,i)=>(
-                <div key={i} className="text-[12px] leading-relaxed mb-1.5">
-                  ● <span className="font-medium">{c.p.nombre}</span> — para volver al {cfg.margenGranel}% habría que vender el kilo a <span className="f-mono">{C(c.sugKilo)}</span>
-                  {num(c.p.precioKilo) > 0 && <span className="text-[var(--muted)]"> (hoy {C(num(c.p.precioKilo))})</span>}
-                  {c.sugSaco > 0 && <span className="text-[var(--muted)]"> · empaque {C(c.sugSaco)}</span>}
-                </div>
-              ))}
-              <p className="text-[11px] text-[var(--muted)] mt-2">Los precios de venta no se cambian solos. Esto es para que decidás vos, en Precios.</p>
-            </div>
-          )}
-
-          <Btn kind="signal" className="btn-lg commit w-full" disabled={nuevas.length===0 || guardando || nuevosIncompletos.length>0} onClick={confirmar}>
-            {guardando ? "Guardando…"
-              : nuevas.length === 0 ? "Nada nuevo que cargar"
-              : nuevosIncompletos.length > 0 ? "Falta el contenido de " + nuevosIncompletos.length + (nuevosIncompletos.length===1 ? " artículo" : " artículos")
-              : "Cargar y actualizar costos"}
-          </Btn>
-        </React.Fragment>
-      )}
-    </Modal>
+    <input
+      value={v}
+      placeholder={placeholder}
+      inputMode={mono ? "decimal" : undefined}
+      onChange={(e)=>{ setTocado(true); setV(e.target.value); }}
+      onBlur={()=>{ setTocado(false); if (String(valor == null ? "" : valor) !== v) onGuardar(v); }}
+      onKeyDown={(e)=>{ if (e.key === "Enter") e.target.blur(); }}
+      className={`${ancho} ${alinear} ${mono ? "f-mono" : ""} px-2 min-h-[44px] rounded-[6px] border border-transparent bg-transparent hover:border-[var(--line)] focus:border-[var(--signal)] focus:bg-white focus:outline-none text-[13px]`}
+    />
   );
 }
 
 function Precios({ precios, enlaces, gastos, cfg, guardar, borrar, aviso, usuario }) {
-  const [q, setQ] = useState(""); const [edit, setEdit] = useState(null);
-  const [imp, setImp] = useState(false); const [soloBajos, setSoloBajos] = useState(false);
-  const [factura, setFactura] = useState(false);
+  const [q, setQ] = useState("");
+  const [imp, setImp] = useState(false);
+  const [soloBajos, setSoloBajos] = useState(false);
+  const [edit, setEdit] = useState(null);
+  const gDef = cfg.gananciaDef != null ? cfg.gananciaDef : 20;
 
   const dups = useMemo(()=>{
     const c = {}; precios.forEach((p)=>(c[norm(p.nombre)] = (c[norm(p.nombre)]||0)+1));
     return new Set(Object.keys(c).filter((k)=>c[k]>1));
   }, [precios]);
 
-  const lista = precios
+  /* una fila con todo lo derivado ya calculado */
+  const fila = (p) => {
+    const peso = num(p.peso), costo = num(p.costo);
+    const g = p.ganancia != null && p.ganancia !== "" ? num(p.ganancia) : gDef;
+    const costoKilo = peso > 0 ? costo/peso : 0;
+    const sugKilo = costoKilo > 0 ? red25(conIVA(conGanancia(costoKilo, g))) : 0;
+    const sugSaco = costo > 0 ? red25(conIVA(conGanancia(costo, g))) : 0;
+    const finKilo = num(p.precioKilo), finSaco = num(p.precioSaco);
+    return {
+      p, peso, costo, g, costoKilo, sugKilo, sugSaco, finKilo, finSaco,
+      margenKilo: finKilo > 0 && costoKilo > 0 ? margen(finKilo, costoKilo) : null,
+      margenSaco: finSaco > 0 && costo > 0 ? margen(finSaco, costo) : null,
+      bajoKilo: finKilo > 0 && sugKilo > 0 && finKilo < sugKilo,
+      bajoSaco: finSaco > 0 && sugSaco > 0 && finSaco < sugSaco,
+      sinPrecio: costo > 0 && finKilo <= 0 && finSaco <= 0,
+    };
+  };
+
+  const filas = useMemo(()=>precios
     .filter((p)=>!q || norm(p.nombre).includes(norm(q)))
-    .filter((p)=>{
-      if (!soloBajos) return true;
-      const mg = p.precioKilo>0 && p.peso>0 ? margen(p.precioKilo, p.costo/p.peso) : null;
-      const ms = p.precioSaco>0 ? margen(p.precioSaco, p.costo) : null;
-      return (mg!==null && mg<cfg.margenGranel) || (ms!==null && ms<cfg.margenSaco);
-    })
-    .sort((a,b)=>a.nombre.localeCompare(b.nombre));
+    .map(fila)
+    .filter((f)=>!soloBajos || f.bajoKilo || f.bajoSaco || f.sinPrecio)
+    .sort((a,b)=>a.p.nombre.localeCompare(b.p.nombre)),
+  [precios, q, soloBajos, gDef, cfg]);
+
+  const grabar = async (p, campos) => {
+    await guardar("precios", { ...p, ...campos, actualizado: hoyISO() });
+  };
+
+  const usarSugerido = async (f, cual) => {
+    if (cual === "ambos") await grabar(f.p, { precioKilo: f.sugKilo, precioSaco: f.sugSaco });
+    else if (cual === "kilo") await grabar(f.p, { precioKilo: f.sugKilo });
+    else await grabar(f.p, { precioSaco: f.sugSaco });
+  };
+
+  const aplicarTodos = async () => {
+    const pend = filas.filter((f)=>f.sugKilo > 0 && (f.finKilo !== f.sugKilo || f.finSaco !== f.sugSaco));
+    for (const f of pend) await usarSugerido(f, "ambos");
+    aviso(pend.length + (pend.length === 1 ? " precio actualizado" : " precios actualizados"));
+  };
+
+  const desactualizados = filas.filter((f)=>f.bajoKilo || f.bajoSaco).length;
 
   return (
     <div>
       <div className="flex gap-2 mb-3">
         <Btn className="flex-1" onClick={()=>setEdit({ nuevo:true })}>+ Artículo</Btn>
         <Btn kind="ghost" className="flex-1" onClick={()=>setImp(true)}>Pegar tabla</Btn>
-        <Btn kind="ghost" className="flex-1" onClick={()=>setFactura(true)}>Factura XML</Btn>
       </div>
 
       {precios.length === 0 ? (
         <Card className="p-6 text-center">
-          <div className="text-sm text-stone-700 mb-1">Cargá tu tabla de costos</div>
-          <p className="text-[13px] text-stone-500 leading-relaxed">Con "Pegar tabla" copiás las filas del Excel tal cual y la app recalcula el margen real de cada artículo.</p>
+          <div className="text-[14px] mb-1">Todavía no hay artículos.</div>
+          <p className="text-[13px] text-[var(--muted)] leading-relaxed">Con "Pegar tabla" copiás las filas del Sheets tal cual, o agregás uno a mano con "+ Artículo".</p>
         </Card>
       ) : (
-        <>
+        <React.Fragment>
           <Inp placeholder="Buscar artículo…" value={q} onChange={(e)=>setQ(e.target.value)} className="mb-2" />
-          <div className="flex justify-between items-center mb-3 px-1">
-            <button onClick={()=>setSoloBajos(!soloBajos)} className="text-[12px] text-stone-600 underline">{soloBajos ? "Ver todos" : "Ver solo los que van bajo la meta"}</button>
-            <span className="text-[11px] text-stone-500 font-mono">{lista.length} de {precios.length}</span>
+
+          <div className="flex justify-between items-center gap-3 mb-2 px-1">
+            <button onClick={()=>setSoloBajos(!soloBajos)} className="f-head text-[10px] text-[var(--muted)] tap-44">
+              {soloBajos ? "Ver todos" : "Ver solo los que hay que revisar"}
+            </button>
+            <span className="f-mono text-[11px] text-[var(--muted)]">{filas.length} de {precios.length}</span>
           </div>
-          <div className="space-y-2 lg:space-y-0 lg:grid lg:grid-cols-2 lg:gap-3">
-            {lista.map((p)=>{
-              const ck = p.peso>0 ? p.costo/p.peso : 0;
-              const mg = p.precioKilo>0 ? margen(p.precioKilo, ck) : null;
-              const ms = p.precioSaco>0 ? margen(p.precioSaco, p.costo) : null;
-              const ig = ind(mg, cfg.margenGranel), is = ind(ms, cfg.margenSaco);
-              return (
-                <Card key={p.id} className="p-3">
-                  <button onClick={()=>setEdit(p)} className="w-full text-left">
-                    <div className="flex justify-between items-start gap-2">
-                      <span className="text-sm font-medium">{p.nombre}{dups.has(norm(p.nombre)) && <span className="text-stone-500 ml-1.5">◐</span>}</span>
-                      <span className="font-mono tabular-nums text-[12px] text-stone-500 shrink-0">{p.peso} {p.unidad || "kg"}</span>
-                    </div>
-                    <div className="font-mono tabular-nums text-[11px] text-stone-500 mt-0.5">
-                      Costo {C(p.costo)} · {C(ck)} por {p.unidad==="u" ? "unidad" : "kilo"}
-                      {p.actualizado && <span className={diasDesde(p.actualizado) > 60 ? "text-stone-900" : ""}> · {diasDesde(p.actualizado) > 60 ? "● " : ""}hace {diasDesde(p.actualizado)} días</span>}
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 mt-2 text-[12px]">
-                      <div className="bg-stone-50 rounded-md p-2">
-                        <div className="text-[10px] uppercase tracking-wide text-stone-500">Granel</div>
-                        <div className="font-mono tabular-nums">{p.precioKilo>0 ? C(p.precioKilo) : "—"}</div>
-                        <div className="font-mono tabular-nums text-[11px] text-stone-600">{ig.s} {mg===null ? "sin precio" : mg.toFixed(0)+"%"}</div>
+
+          {/* ---------- la tabla ---------- */}
+          <Card className="overflow-x-auto">
+            <table className="w-full text-[13px]" style={{ minWidth: 760 }}>
+              <thead>
+                <tr className="border-b border-[var(--line-strong)]">
+                  {["Artículo","Peso","Costo","Costo x kilo","Ganancia","Sugerido x kilo","Precio x kilo","Precio saco",""].map((h,i)=>(
+                    <th key={i} className={"f-head text-[9px] text-[var(--muted)] px-2 py-2 whitespace-nowrap " + (i===0 ? "text-left sticky left-0 bg-white z-10" : i===8 ? "text-center" : "text-right")}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filas.map((f)=>(
+                  <tr key={f.p.id} className="border-b border-[var(--line)] align-middle">
+                    <td className="px-1 py-1 sticky left-0 bg-white z-10 max-w-[190px]">
+                      <div className="flex items-center gap-1">
+                        <span className="w-3 text-[11px] shrink-0">{f.sinPrecio ? "●" : f.bajoKilo || f.bajoSaco ? "◐" : "○"}</span>
+                        <Celda valor={f.p.nombre} mono={false} alinear="text-left" ancho="w-full min-w-[130px]"
+                          onGuardar={(v)=>grabar(f.p, { nombre: v })} />
+                        {dups.has(norm(f.p.nombre)) && <span className="text-[11px] text-[var(--muted)] shrink-0" title="nombre repetido">◐</span>}
                       </div>
-                      <div className="bg-stone-50 rounded-md p-2">
-                        <div className="text-[10px] uppercase tracking-wide text-stone-500">Saco completo</div>
-                        <div className="font-mono tabular-nums">{p.precioSaco>0 ? C(p.precioSaco) : "—"}</div>
-                        <div className="font-mono tabular-nums text-[11px] text-stone-600">{is.s} {ms===null ? "sin precio" : ms.toFixed(0)+"%"}</div>
+                    </td>
+                    <td className="px-1 py-1"><Celda valor={f.p.peso} ancho="w-16" onGuardar={(v)=>grabar(f.p, { peso: num(v) })} /></td>
+                    <td className="px-1 py-1"><Celda valor={f.p.costo} ancho="w-24" onGuardar={(v)=>grabar(f.p, { costo: num(v) })} /></td>
+                    <td className="px-2 py-1 text-right f-mono text-[var(--muted)] whitespace-nowrap">{f.costoKilo > 0 ? C(f.costoKilo) : "—"}</td>
+                    <td className="px-1 py-1">
+                      <Celda valor={f.p.ganancia != null && f.p.ganancia !== "" ? f.p.ganancia : ""} ancho="w-16" placeholder={String(gDef)}
+                        onGuardar={(v)=>grabar(f.p, { ganancia: v === "" ? "" : num(v) })} />
+                    </td>
+                    <td className="px-2 py-1 text-right whitespace-nowrap">
+                      {f.sugKilo > 0
+                        ? <button onClick={()=>usarSugerido(f, "kilo")} className="f-mono text-[13px] underline decoration-dotted underline-offset-4">{C(f.sugKilo)}</button>
+                        : <span className="text-[var(--muted)]">—</span>}
+                    </td>
+                    <td className="px-1 py-1">
+                      <Celda valor={f.p.precioKilo} ancho="w-24" onGuardar={(v)=>grabar(f.p, { precioKilo: num(v) })} />
+                      <div className="text-[10px] text-[var(--muted)] text-right pr-2 f-mono">
+                        {f.margenKilo != null ? f.margenKilo.toFixed(0)+"% s/venta" : ""}
                       </div>
-                    </div>
-                  </button>
-                </Card>
-              );
-            })}
+                    </td>
+                    <td className="px-1 py-1">
+                      <Celda valor={f.p.precioSaco} ancho="w-24" onGuardar={(v)=>grabar(f.p, { precioSaco: num(v) })} />
+                      <div className="text-[10px] text-[var(--muted)] text-right pr-2 f-mono">
+                        {f.sugSaco > 0 ? "sug. " + C(f.sugSaco) : ""}
+                      </div>
+                    </td>
+                    <td className="px-1 py-1 text-center whitespace-nowrap">
+                      <button onClick={()=>usarSugerido(f, "ambos")} className="f-head text-[9px] text-[var(--signal)] px-2 min-h-[44px]">Usar</button>
+                      <button onClick={()=>setEdit(f.p)} className="f-head text-[9px] text-[var(--muted)] px-2 min-h-[44px]">Abrir</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+
+          <div className="flex flex-wrap items-center justify-between gap-2 mt-3">
+            <p className="text-[11px] text-[var(--muted)] leading-relaxed flex-1 min-w-[240px]">
+              ● sin precio · ◐ el precio quedó por debajo del sugerido · ○ al día.
+              La ganancia se aplica sobre el costo ({gDef}% por defecto, se cambia en Ajustes) y el sugerido sale redondeado a ₡25, con IVA incluido.
+              Tocá el sugerido para copiarlo a la columna de precio.
+            </p>
+            {desactualizados > 0 && (
+              <Btn kind="ghost" onClick={aplicarTodos}>Usar el sugerido en {desactualizados}</Btn>
+            )}
           </div>
-          <p className="text-[11px] text-stone-500 leading-relaxed mt-3">★ sobre la meta · ○ en meta · ◐ apenas debajo · ● margen muy bajo · — falta precio. Metas: granel {cfg.margenGranel}%, saco {cfg.margenSaco}%.</p>
-        </>
+        </React.Fragment>
       )}
 
       {edit && <PrecioModal p={edit.nuevo ? null : edit} cfg={cfg} onClose={()=>setEdit(null)}
         onSave={async (np)=>{ await guardar("precios", np); setEdit(null); aviso("Artículo guardado"); }}
         onDelete={async (id)=>{ await borrar("precios", id); setEdit(null); aviso("Artículo eliminado"); }} />}
 
-      {factura && (
-        <FacturaXMLModal
-          precios={precios}
-          enlaces={enlaces||[]}
-          gastos={gastos||[]}
-          cfg={cfg}
-          guardar={guardar}
-          usuario={usuario}
-          aviso={aviso}
-          onClose={()=>setFactura(false)}
-        />
-      )}
       {imp && <ImportPreciosModal onClose={()=>setImp(false)} onSave={async (filas)=>{
         await window.FB.guardarLote("precios", filas);
         setImp(false); aviso(filas.length + " artículos cargados");
@@ -3872,6 +3542,11 @@ function AjustesModal({ cfg, guardar, onClose }) {
       <div className="grid grid-cols-2 gap-3 mb-3">
         <div><Lbl>Margen meta granel (%)</Lbl><Inp inputMode="decimal" value={f.margenGranel} onChange={(e)=>setF({...f, margenGranel:num(e.target.value)})} className="font-mono" /></div>
         <div><Lbl>Margen meta saco (%)</Lbl><Inp inputMode="decimal" value={f.margenSaco} onChange={(e)=>setF({...f, margenSaco:num(e.target.value)})} className="font-mono" /></div>
+      </div>
+      <div className="mb-3">
+        <Lbl>Ganancia sobre el costo (%)</Lbl>
+        <Inp inputMode="decimal" value={f.gananciaDef != null ? f.gananciaDef : 20} onChange={(e)=>setF({...f, gananciaDef:num(e.target.value)})} className="font-mono" />
+        <p className="text-[11px] text-stone-500 mt-1">Se aplica como costo × (1 + g/100), igual que en la hoja. Cada artículo puede llevar la suya propia en la tabla de Precios.</p>
       </div>
       <div className="mb-3">
         <Lbl>Costo de los artículos</Lbl>
