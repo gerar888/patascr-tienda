@@ -203,9 +203,22 @@ const num = (v) => {
 
 const CATS = ["Mercadería", "Empaque", "Alquiler", "Servicios", "Transporte", "Marketing", "Impuestos", "Otro"];
 const PAGOS = ["Efectivo", "SINPE", "Tarjeta", "Otro"];
-const CFG_DEF = { id: "general", meta: 140000, costoPct: 80, excluirDomingos: true, margenGranel: 20, margenSaco: 15, fondoCaja: 20000, saldoBanco: 0, diasTarjeta: 1, inventarioIni: 0, semanasColchon: 4 };
+const CFG_DEF = { id: "general", meta: 140000, costoPct: 80, excluirDomingos: true, margenGranel: 20, margenSaco: 15, fondoCaja: 20000, saldoBanco: 0, diasTarjeta: 1, inventarioIni: 0, semanasColchon: 4, costoSinIVA: true, tarifaIVA: 13 };
 
-const margen = (precio, costo) => (precio > 0 ? ((precio - costo) / precio) * 100 : null);
+/* ---------- convención única de IVA ----------
+   Los costos se guardan SIN IVA (así vienen en el XML y así se acreditan).
+   Los precios de venta se digitan CON IVA, que es lo que paga el cliente.
+   Para comparar peras con peras, todo margen le quita el IVA al precio primero.
+   Si se cambia a costos CON IVA en Ajustes, deja de restarse en ambos lados. */
+const IVA = { neto: true, tarifa: 13 };
+const aplicarIVA = (cfg) => {
+  IVA.neto = cfg && cfg.costoSinIVA !== false;
+  IVA.tarifa = cfg && cfg.tarifaIVA != null ? cfg.tarifaIVA : 13;
+};
+const sinIVA = (m) => (IVA.neto && IVA.tarifa > 0 ? m/(1 + IVA.tarifa/100) : m);
+const conIVA = (m) => (IVA.neto && IVA.tarifa > 0 ? m*(1 + IVA.tarifa/100) : m);
+
+const margen = (precio, costo) => { const p = sinIVA(precio); return p > 0 ? ((p - costo) / p) * 100 : null; };
 const partes = (t) => (t || "").split(/\s*\+\s*/).map((s) => s.trim()).filter(Boolean);
 const norm = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
 
@@ -368,6 +381,7 @@ function App() {
   const [movs] = useColeccion("movimientos", sesion);
   const [cfgArr] = useColeccion("config", sesion);
   const cfg = { ...CFG_DEF, ...(cfgArr[0] || {}) };
+  aplicarIVA(cfg);   /* una sola convención de IVA para toda la app */
 
   const aviso = (t) => { setToast(t); setTimeout(() => setToast(null), 2000); };
   const guardar = async (col, obj) => { try { await window.FB.guardar(col, obj); } catch (e) { aviso("No se pudo guardar: " + e.code); } };
@@ -1704,7 +1718,7 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
   /* ---------- de esa plata, cuánto es ganancia ---------- */
   const an = useMemo(()=>analizarVentas(vMes, precios, enlaces), [vMes, precios, enlaces]);
   const costoVendido = an.costoId + an.sinId * ((cfg.costoPct||80)/100);
-  const gananciaBruta = ventasMes - costoVendido;
+  const gananciaBruta = sinIVA(ventasMes) - costoVendido;   /* el IVA cobrado no es ganancia: se le debe a Hacienda */
   const gananciaMes = gananciaBruta - fijosMes - otrosMes;
   const flujoMes = saldoFin - saldoIni - ajMes;
   const enInventario = costoVendido - merca;
@@ -2462,7 +2476,7 @@ function FacturaXMLModal({ precios, enlaces, gastos, cfg, guardar, usuario, avis
   const [errores, setErrores] = useState([]);
   const [mapa, setMapa] = useState({});        /* clave|linea → productoId | "" (ignorar) */
   const [pago, setPago] = useState("Transferencia");
-  const [conIVA, setConIVA] = useState(!!cfg.ivaEnCosto);
+  const costoConIVA = cfg.costoSinIVA === false;   /* la convención vive en Ajustes, no acá */
   const [guardando, setGuardando] = useState(false);
   const inputRef = useRef(null);
 
@@ -2489,7 +2503,7 @@ function FacturaXMLModal({ precios, enlaces, gastos, cfg, guardar, usuario, avis
     setErrores(mal);
   };
 
-  const costoDe = (l) => conIVA ? l.unitConIVA : l.unitNeto;
+  const costoDe = (l) => costoConIVA ? l.unitConIVA : l.unitNeto;
   const nuevas = facturas.filter((f)=>!yaImportada(f.clave));
   const totalGasto = nuevas.reduce((a,f)=>a+f.totalPagado, 0);
 
@@ -2507,13 +2521,13 @@ function FacturaXMLModal({ precios, enlaces, gastos, cfg, guardar, usuario, avis
       out.push({
         f, l, p, antes, ahora,
         delta: antes > 0 ? (ahora/antes - 1)*100 : null,
-        sugSaco: ahora/(1 - (cfg.margenSaco||15)/100),
-        sugKilo: ckAhora > 0 ? ckAhora/(1 - (cfg.margenGranel||20)/100) : 0,
+        sugSaco: conIVA(ahora/(1 - (cfg.margenSaco||15)/100)),
+        sugKilo: ckAhora > 0 ? conIVA(ckAhora/(1 - (cfg.margenGranel||20)/100)) : 0,
         desfasado: peso > 0 && num(p.precioKilo) > 0 && margen(num(p.precioKilo), ckAhora) < (cfg.margenGranel||20),
       });
     }));
     return out;
-  }, [nuevas, mapa, precios, conIVA, cfg]);
+  }, [nuevas, mapa, precios, costoConIVA, cfg]);
 
   const sinEnlazar = nuevas.reduce((a,f)=>a + f.lineas.filter((l,i)=>mapa[f.clave+"|"+i] === undefined).length, 0);
 
@@ -2652,18 +2666,13 @@ function FacturaXMLModal({ precios, enlaces, gastos, cfg, guardar, usuario, avis
             Agregar otra factura
           </button>
 
-          <div className="mb-3">
-            <Lbl>Costo que se guarda</Lbl>
-            <div className="grid grid-cols-2 gap-1.5">
-              {[[false,"Sin IVA"],[true,"Con IVA"]].map(([v,l])=>(
-                <button key={String(v)} onClick={()=>setConIVA(v)}
-                  className={"f-head text-[10px] min-h-[48px] rounded-[8px] border " + (conIVA===v
-                    ? "bg-[var(--ink)] text-[#F2F3F0] border-[var(--ink)]"
-                    : "bg-white text-[var(--ink)] border-[var(--line-strong)]")}>{l}</button>
-              ))}
+          <div className="border border-[var(--line-strong)] rounded-[10px] p-3 mb-3">
+            <div className="flex justify-between items-baseline gap-3">
+              <span className="f-head text-[10px] text-[var(--muted)]">Costo que se guarda</span>
+              <span className="f-head text-[10px]">{costoConIVA ? "Con IVA" : "Sin IVA"}</span>
             </div>
             <p className="text-[11px] text-[var(--muted)] mt-1.5 leading-relaxed">
-              Si acreditás el IVA en la declaración, el costo real es sin IVA. Si no lo acreditás, el costo es con IVA. El gasto siempre se registra por el total pagado, {C(totalGasto)}.
+              Siempre el mismo criterio, en todas las facturas y todos los artículos. Se cambia en Ajustes, no acá, para que nunca queden costos mezclados. El gasto se registra por el total pagado, {C(totalGasto)}.
             </p>
           </div>
 
@@ -2831,7 +2840,7 @@ function PrecioModal({ p, cfg, onClose, onSave, onDelete }) {
         <Lbl>Precio de venta al granel</Lbl>
         <Inp inputMode="decimal" value={f.precioKilo} onChange={(e)=>setF({...f, precioKilo:e.target.value})} className="font-mono text-lg" />
         <div className="flex justify-between text-[11px] mt-1">
-          <span className="text-stone-500">Para {cfg.margenGranel}%: {C(ck/(1-cfg.margenGranel/100))}</span>
+          <span className="text-stone-500">Para {cfg.margenGranel}%: {C(conIVA(ck/(1-cfg.margenGranel/100)))}</span>
           <span className="font-mono">{mg===null ? "—" : ind(mg,cfg.margenGranel).s + " " + mg.toFixed(1)+"%"}</span>
         </div>
       </div>
@@ -2839,7 +2848,7 @@ function PrecioModal({ p, cfg, onClose, onSave, onDelete }) {
         <Lbl>Precio del saco o empaque completo</Lbl>
         <Inp inputMode="decimal" value={f.precioSaco} onChange={(e)=>setF({...f, precioSaco:e.target.value})} className="font-mono text-lg" />
         <div className="flex justify-between text-[11px] mt-1">
-          <span className="text-stone-500">Para {cfg.margenSaco}%: {C(costo/(1-cfg.margenSaco/100))}</span>
+          <span className="text-stone-500">Para {cfg.margenSaco}%: {C(conIVA(costo/(1-cfg.margenSaco/100)))}</span>
           <span className="font-mono">{ms===null ? "—" : ind(ms,cfg.margenSaco).s + " " + ms.toFixed(1)+"%"}</span>
         </div>
         {num(f.precioKilo)>0 && num(f.precioSaco)>0 && peso>0 && (
@@ -3012,7 +3021,7 @@ function Analisis({ ventas, gastos, precios, enlaces, cierres, cfg }) {
     dispersion
       .filter((p)=>p.pct < cfg.margenGranel)
       .map((p)=>{
-        const necesaria = p.costo > 0 ? p.costo / (1 - cfg.margenGranel/100) : 0;
+        const necesaria = p.costo > 0 ? conIVA(p.costo / (1 - cfg.margenGranel/100)) : 0;
         return { ...p, falta: p.venta*(cfg.margenGranel-p.pct)/100, subida: necesaria > 0 ? (necesaria/p.venta - 1)*100 : 0 };
       })
       .sort((a,b)=>b.falta-a.falta)
@@ -3789,6 +3798,24 @@ function AjustesModal({ cfg, guardar, onClose }) {
       <div className="grid grid-cols-2 gap-3 mb-3">
         <div><Lbl>Margen meta granel (%)</Lbl><Inp inputMode="decimal" value={f.margenGranel} onChange={(e)=>setF({...f, margenGranel:num(e.target.value)})} className="font-mono" /></div>
         <div><Lbl>Margen meta saco (%)</Lbl><Inp inputMode="decimal" value={f.margenSaco} onChange={(e)=>setF({...f, margenSaco:num(e.target.value)})} className="font-mono" /></div>
+      </div>
+      <div className="mb-3">
+        <Lbl>Costo de los artículos</Lbl>
+        <div className="grid grid-cols-2 gap-1.5">
+          {[[true,"Sin IVA"],[false,"Con IVA"]].map(([v,l])=>(
+            <button key={String(v)} onClick={()=>setF({...f, costoSinIVA:v})}
+              className={"f-head text-[10px] min-h-[48px] rounded-[8px] border " + ((f.costoSinIVA !== false)===v
+                ? "bg-[var(--ink)] text-[#F2F3F0] border-[var(--ink)]"
+                : "bg-white text-[var(--ink)] border-[var(--line-strong)]")}>{l}</button>
+          ))}
+        </div>
+        <p className="text-[11px] text-stone-500 mt-1.5 leading-relaxed">
+          Criterio único para todas las facturas. Con "Sin IVA", el costo es el neto del XML y la app le quita el IVA al precio de venta antes de calcular el margen, para comparar lo mismo contra lo mismo. Cambiarlo acá no reescribe los costos ya guardados.
+        </p>
+      </div>
+      <div className="mb-3">
+        <Lbl>Tarifa de IVA (%)</Lbl>
+        <Inp inputMode="decimal" value={f.tarifaIVA != null ? f.tarifaIVA : 13} onChange={(e)=>setF({...f, tarifaIVA:num(e.target.value)})} className="font-mono" />
       </div>
       <div className="mb-3">
         <Lbl>Inventario en bodega al empezar a contarlo</Lbl>
