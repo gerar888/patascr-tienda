@@ -2471,6 +2471,23 @@ function sugerirArticulo(detalle, precios) {
   return mejorPtj >= 5 ? mejor : null;
 }
 
+/* «[4L] NS S-M Puppy Dog» → nombre sin el corchete de presentación */
+const nombreDesdeDetalle = (d) => (d||"").replace(/\[[^\]]*\]/g, " ").replace(/\s+/g," ").trim();
+
+/* intenta leer el contenido del corchete y pasarlo a kg. Siempre queda editable. */
+const contenidoDesdeDetalle = (d) => {
+  const m = (d||"").match(/\[\s*([\d.,]+)\s*([a-zA-Z]+)\s*\]/);
+  if (!m) return { peso: "", unidad: "kg", seguro: false };
+  const n = parseFloat(m[1].replace(",", "."));
+  if (!isFinite(n) || n <= 0) return { peso: "", unidad: "kg", seguro: false };
+  const u = m[2].toLowerCase();
+  if (u === "kg")             return { peso: String(n), unidad: "kg", seguro: true };
+  if (u === "g" || u === "gr") return { peso: String(Math.round(n/10)/100), unidad: "kg", seguro: true };
+  if (u === "lb" || u === "lbs" || u === "l") return { peso: String(Math.round(n*453.6)/1000), unidad: "kg", seguro: false };
+  if (u === "oz")             return { peso: String(Math.round(n*28.35)/1000), unidad: "kg", seguro: false };
+  return { peso: "", unidad: "u", seguro: false };
+};
+
 function FacturaXMLModal({ precios, enlaces, gastos, cfg, guardar, usuario, aviso, onClose }) {
   const [facturas, setFacturas] = useState([]);
   const [errores, setErrores] = useState([]);
@@ -2478,7 +2495,24 @@ function FacturaXMLModal({ precios, enlaces, gastos, cfg, guardar, usuario, avis
   const [pago, setPago] = useState("Transferencia");
   const costoConIVA = cfg.costoSinIVA === false;   /* la convención vive en Ajustes, no acá */
   const [guardando, setGuardando] = useState(false);
+  const [nuevos, setNuevos] = useState({});   /* artículos que se crean desde la factura */
   const inputRef = useRef(null);
+
+  /* la lista de precios más los que se están creando en esta misma pantalla */
+  const catalogo = useMemo(()=>[...precios, ...Object.values(nuevos)], [precios, nuevos]);
+  const buscar = (id) => catalogo.find((x)=>x.id === id);
+
+  const crearDesdeLinea = (clave, i, l) => {
+    const c = contenidoDesdeDetalle(l.detalle);
+    const art = {
+      id: UID(), nombre: nombreDesdeDetalle(l.detalle) || l.detalle,
+      peso: c.peso, unidad: c.unidad, costo: 0, precioKilo: "", precioSaco: "",
+      _nuevo: true, _dudoso: !c.seguro,
+    };
+    setNuevos((prev)=>({ ...prev, [clave+"|"+i]: art }));
+    setMapa((prev)=>({ ...prev, [clave+"|"+i]: art.id }));
+  };
+  const editarNuevo = (k, campo, valor) => setNuevos((prev)=>({ ...prev, [k]: { ...prev[k], [campo]: valor } }));
 
   const yaImportada = (clave) => gastos.some((g)=>g.facturaClave && g.facturaClave === clave);
 
@@ -2513,7 +2547,7 @@ function FacturaXMLModal({ precios, enlaces, gastos, cfg, guardar, usuario, avis
     nuevas.forEach((f)=>f.lineas.forEach((l,i)=>{
       const pid = mapa[f.clave+"|"+i];
       if (!pid) return;
-      const p = precios.find((x)=>x.id === pid);
+      const p = buscar(pid);
       if (!p) return;
       const antes = num(p.costo), ahora = costoDe(l);
       const peso = num(p.peso) || 0;
@@ -2527,9 +2561,11 @@ function FacturaXMLModal({ precios, enlaces, gastos, cfg, guardar, usuario, avis
       });
     }));
     return out;
-  }, [nuevas, mapa, precios, costoConIVA, cfg]);
+  }, [nuevas, mapa, catalogo, costoConIVA, cfg]);
 
   const sinEnlazar = nuevas.reduce((a,f)=>a + f.lineas.filter((l,i)=>mapa[f.clave+"|"+i] === undefined).length, 0);
+  const nuevosUsados = Object.entries(nuevos).filter(([k,a])=>mapa[k] === a.id);
+  const nuevosIncompletos = nuevosUsados.filter(([k,a])=>!a.nombre.trim() || num(a.peso) <= 0);
 
   const confirmar = async () => {
     setGuardando(true);
@@ -2562,7 +2598,8 @@ function FacturaXMLModal({ precios, enlaces, gastos, cfg, guardar, usuario, avis
       const porProducto = {};
       cambios.forEach((c)=>{ porProducto[c.p.id] = c; });
       for (const c of Object.values(porProducto)) {
-        await guardar("precios", { ...c.p, costo: Math.round(c.ahora*100)/100 });
+        const { _nuevo, _dudoso, ...art } = c.p;
+        await guardar("precios", { ...art, costo: Math.round(c.ahora*100)/100 });
       }
       aviso(nuevas.length + (nuevas.length===1 ? " factura cargada" : " facturas cargadas"));
       onClose();
@@ -2621,7 +2658,8 @@ function FacturaXMLModal({ precios, enlaces, gastos, cfg, guardar, usuario, avis
 
             {!repetida && f.lineas.map((l,i)=>{
               const pid = mapa[f.clave+"|"+i];
-              const p = pid ? precios.find((x)=>x.id===pid) : null;
+              const p = pid ? buscar(pid) : null;
+              const nuevo = nuevos[f.clave+"|"+i] && mapa[f.clave+"|"+i] === nuevos[f.clave+"|"+i].id ? nuevos[f.clave+"|"+i] : null;
               const antes = p ? num(p.costo) : 0;
               const ahora = costoDe(l);
               const delta = antes > 0 ? (ahora/antes - 1)*100 : null;
@@ -2634,14 +2672,45 @@ function FacturaXMLModal({ precios, enlaces, gastos, cfg, guardar, usuario, avis
                   <div className="mt-1.5 flex gap-1.5 items-center">
                     <select
                       value={pid === undefined ? "?" : pid}
-                      onChange={(e)=>setMapa({ ...mapa, [f.clave+"|"+i]: e.target.value === "?" ? undefined : e.target.value })}
+                      onChange={(e)=>{
+                        const v = e.target.value;
+                        if (v === "+") { crearDesdeLinea(f.clave, i, l); return; }
+                        setMapa({ ...mapa, [f.clave+"|"+i]: v === "?" ? undefined : v });
+                      }}
                       className="flex-1 min-w-0 px-2 min-h-[44px] rounded-[8px] border border-[var(--line-strong)] bg-white text-[13px]">
                       <option value="?">— sin decidir —</option>
+                      <option value="+">+ Crear artículo nuevo</option>
                       <option value="">No es artículo de la lista</option>
-                      {precios.map((x)=>(<option key={x.id} value={x.id}>{x.nombre}</option>))}
+                      {catalogo.map((x)=>(<option key={x.id} value={x.id}>{x.nombre}{x._nuevo ? " (nuevo)" : ""}</option>))}
                     </select>
                   </div>
-                  {p && (
+                  {nuevo && (
+                    <div className="mt-2 rounded-[8px] border-2 border-[var(--ink)] p-2.5">
+                      <div className="f-head text-[10px] text-[var(--muted)] mb-2">Artículo nuevo</div>
+                      <Inp value={nuevo.nombre} onChange={(e)=>editarNuevo(f.clave+"|"+i, "nombre", e.target.value)} placeholder="Nombre como lo llamás vos" />
+                      <div className="grid grid-cols-2 gap-2 mt-2">
+                        <div>
+                          <Lbl>Contenido</Lbl>
+                          <Inp inputMode="decimal" value={nuevo.peso} onChange={(e)=>editarNuevo(f.clave+"|"+i, "peso", e.target.value)} className="f-mono" placeholder="15" />
+                        </div>
+                        <div>
+                          <Lbl>Unidad</Lbl>
+                          <button onClick={()=>editarNuevo(f.clave+"|"+i, "unidad", nuevo.unidad === "kg" ? "u" : "kg")}
+                            className="f-mono w-full min-h-[48px] px-3 rounded-[8px] border border-[var(--line-strong)] bg-white text-[14px]">
+                            {nuevo.unidad === "kg" ? "kg" : "unid."}
+                          </button>
+                        </div>
+                      </div>
+                      <p className="text-[11px] text-[var(--muted)] mt-2 leading-relaxed">
+                        {nuevo._dudoso && nuevo.peso
+                          ? `◐ Saqué ${nuevo.peso} kg del código del proveedor, pero puede estar mal. Verificalo contra el empaque.`
+                          : num(nuevo.peso) > 0
+                            ? `○ Costo por ${nuevo.unidad === "kg" ? "kilo" : "unidad"}: ${C(ahora/num(nuevo.peso))}`
+                            : "● Falta el contenido. Sin eso no se puede calcular el costo por kilo."}
+                      </p>
+                    </div>
+                  )}
+                  {p && !nuevo && (
                     <div className="mt-1 text-[11px] text-[var(--muted)] leading-relaxed">
                       {antes > 0
                         ? <React.Fragment>
@@ -2692,7 +2761,9 @@ function FacturaXMLModal({ precios, enlaces, gastos, cfg, guardar, usuario, avis
             <Linea label="Facturas nuevas" val={String(nuevas.length)} />
             <Linea label="Se registra como gasto de Mercadería" val={C(totalGasto)} />
             <Linea label="Artículos a los que se les actualiza el costo" val={String(new Set(cambios.map((c)=>c.p.id)).size)} />
+            {nuevosUsados.length > 0 && <Linea label="Artículos que se crean" val={String(nuevosUsados.length)} />}
             {sinEnlazar > 0 && <Linea label="◐ Líneas sin decidir" val={String(sinEnlazar)} />}
+            {nuevosIncompletos.length > 0 && <Linea label="● Artículos nuevos sin contenido" val={String(nuevosIncompletos.length)} />}
           </div>
 
           {cambios.some((c)=>c.desfasado) && (
@@ -2709,8 +2780,11 @@ function FacturaXMLModal({ precios, enlaces, gastos, cfg, guardar, usuario, avis
             </div>
           )}
 
-          <Btn kind="signal" className="btn-lg commit w-full" disabled={nuevas.length===0 || guardando} onClick={confirmar}>
-            {guardando ? "Guardando…" : nuevas.length === 0 ? "Nada nuevo que cargar" : "Cargar y actualizar costos"}
+          <Btn kind="signal" className="btn-lg commit w-full" disabled={nuevas.length===0 || guardando || nuevosIncompletos.length>0} onClick={confirmar}>
+            {guardando ? "Guardando…"
+              : nuevas.length === 0 ? "Nada nuevo que cargar"
+              : nuevosIncompletos.length > 0 ? "Falta el contenido de " + nuevosIncompletos.length + (nuevosIncompletos.length===1 ? " artículo" : " artículos")
+              : "Cargar y actualizar costos"}
           </Btn>
         </React.Fragment>
       )}
