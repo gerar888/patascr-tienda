@@ -203,7 +203,7 @@ const num = (v) => {
 
 const CATS = ["Mercadería", "Empaque", "Alquiler", "Servicios", "Transporte", "Marketing", "Impuestos", "Otro"];
 const PAGOS = ["Efectivo", "SINPE", "Tarjeta", "Otro"];
-const CFG_DEF = { id: "general", meta: 140000, costoPct: 80, excluirDomingos: true, margenGranel: 20, margenSaco: 15, fondoCaja: 20000, saldoBanco: 0, diasTarjeta: 1, inventarioIni: 0, semanasColchon: 4, costoSinIVA: true, tarifaIVA: 13, gananciaDef: 20 };
+const CFG_DEF = { id: "general", meta: 140000, costoPct: 80, excluirDomingos: true, margenGranel: 20, margenSaco: 15, fondoCaja: 20000, saldoBanco: 0, diasTarjeta: 1, inventarioIni: 0, semanasColchon: 4, costoSinIVA: true, tarifaIVA: 13, gananciaDef: 20, regimen: "simplificado", impuestoCompras: 0, margenNoIdent: 18 };
 
 /* ---------- convención única de IVA ----------
    Los costos se guardan SIN IVA (así vienen en el XML y así se acreditan).
@@ -212,7 +212,10 @@ const CFG_DEF = { id: "general", meta: 140000, costoPct: 80, excluirDomingos: tr
    Si se cambia a costos CON IVA en Ajustes, deja de restarse en ambos lados. */
 const IVA = { neto: true, tarifa: 13 };
 const aplicarIVA = (cfg) => {
-  IVA.neto = cfg && cfg.costoSinIVA !== false;
+  /* Régimen simplificado: no se cobra IVA en la venta y el de las compras no se
+     acredita, va dentro del costo. Toda la aritmética de IVA queda apagada. */
+  const simplificado = !cfg || cfg.regimen !== "tradicional";
+  IVA.neto = simplificado ? false : (cfg.costoSinIVA !== false);
   IVA.tarifa = cfg && cfg.tarifaIVA != null ? cfg.tarifaIVA : 13;
 };
 const sinIVA = (m) => (IVA.neto && IVA.tarifa > 0 ? m/(1 + IVA.tarifa/100) : m);
@@ -1545,6 +1548,19 @@ function analizarVentas(lista, precios, enlaces) {
   };
 }
 
+/* ---------- ganancia: costo real donde lo hay, margen conservador en el resto ---------- */
+function gananciaDe(a, cfg) {
+  const mNo = cfg && cfg.margenNoIdent != null ? cfg.margenNoIdent : 18;
+  const netoId = sinIVA(a.ventaId), netoSin = sinIVA(a.sinId);
+  const costo = a.costoId + netoSin * (1 - mNo/100);
+  const neto = netoId + netoSin;
+  return {
+    neto, costo, bruta: neto - costo,
+    margen: neto > 0 ? ((neto - costo)/neto)*100 : 0,
+    margenId: netoId > 0 ? ((netoId - a.costoId)/netoId)*100 : null,
+  };
+}
+
 /* ================= DINERO ================= */
 const EN_BANCO = ["SINPE", "Tarjeta", "Otro"];
 
@@ -1697,22 +1713,23 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
 
   /* ---------- de esa plata, cuánto es ganancia ---------- */
   const an = useMemo(()=>analizarVentas(vMes, precios, enlaces), [vMes, precios, enlaces]);
-  const costoVendido = an.costoId + an.sinId * ((cfg.costoPct||80)/100);
-  const gananciaBruta = sinIVA(ventasMes) - costoVendido;   /* el IVA cobrado no es ganancia: se le debe a Hacienda */
+  const G = gananciaDe(an, cfg);
+  const costoVendido = G.costo;
+  const gananciaBruta = G.bruta;
   const gananciaMes = gananciaBruta - fijosMes - otrosMes;
   const flujoMes = saldoFin - saldoIni - ajMes;
   const enInventario = costoVendido - merca;
 
   /* ---------- inventario acumulado y reparto de fin de mes ---------- */
   const anTodo = useMemo(()=>analizarVentas(ventas, precios, enlaces), [ventas, precios, enlaces]);
-  const costoTodo = anTodo.costoId + anTodo.sinId * ((cfg.costoPct||80)/100);
+  const costoTodo = gananciaDe(anTodo, cfg).costo;
   const mercaTodo = gastos.filter((g)=>g.categoria==="Mercadería").reduce((a,g)=>a+g.monto,0);
   const inventario = (cfg.inventarioIni||0) + mercaTodo - costoTodo;
 
   /* costo diario de los últimos 30 días, para traducir el inventario a días de bodega */
   const hace30 = useMemo(()=>{ const d = new Date(); d.setDate(d.getDate()-30); return d.toLocaleDateString("en-CA"); }, []);
   const an30 = useMemo(()=>analizarVentas(ventas.filter((v)=>v.fecha>=hace30), precios, enlaces), [ventas, precios, enlaces, hace30]);
-  const costoDiario = (an30.costoId + an30.sinId * ((cfg.costoPct||80)/100)) / 30;
+  const costoDiario = gananciaDe(an30, cfg).costo / 30;
   const diasInv = costoDiario > 0 ? inventario/costoDiario : null;
 
   const aportes = movs.filter((m)=>m.metodo==="aporte").reduce((a,m)=>a+Math.abs(m.monto),0);
@@ -1723,7 +1740,9 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
   const semanas = cfg.semanasColchon != null ? cfg.semanasColchon : 4;
   const colchon = fijosMensuales * (semanas/4);
   const reponer = Math.max(0, costoVendido - merca);
-  const comprometido = reponer + fijosMensuales + aportePend + colchon;
+  const impPct = cfg.impuestoCompras || 0;
+  const impuesto = merca * (impPct/100);
+  const comprometido = reponer + fijosMensuales + aportePend + colchon + impuesto;
   const libre = totalNegocio - comprometido;
   const sugerido = Math.max(0, Math.min(libre, gananciaMes));
 
@@ -1900,6 +1919,7 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
             <Linea label="Reponer lo que se vendió y no se recompró" val={"− " + C(reponer)} />
             <Linea label="Gastos fijos del mes que entra" val={"− " + C(fijosMensuales)} />
             {aportePend > 0 && <Linea label="Devolver aportes de socios" val={"− " + C(aportePend)} />}
+            {impuesto > 0 && <Linea label={`Impuesto sobre compras (${impPct}%)`} val={"− " + C(impuesto)} />}
             <Linea label={`Colchón de ${semanas} semanas`} val={"− " + C(colchon)} />
           </div>
           <div className="pt-2 mt-1 border-t border-[var(--line-strong)]">
@@ -3086,11 +3106,10 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, cfg, guard
   const analisis = useMemo(()=>analizarVentas(delMes, precios, enlaces), [delMes, precios, enlaces]);
 
   /* ganancia: costo real donde se pudo, porcentaje estimado en el resto */
-  const margenId = analisis.ventaId>0 ? margen(analisis.ventaId, analisis.costoId) : null;
-  const gananciaId = analisis.ventaId - analisis.costoId;
-  const gananciaEst = analisis.sinId * (1 - cfg.costoPct/100);
-  const gananciaBruta = gananciaId + gananciaEst;
-  const margenBruto = total>0 ? (gananciaBruta/total)*100 : 0;
+  const G = gananciaDe(analisis, cfg);
+  const margenId = G.margenId;
+  const gananciaBruta = G.bruta;
+  const margenBruto = G.margen;
   const gananciaNeta = gananciaBruta - fijosPagados;
 
   const totalFijos = fijos.reduce((a,f)=>a+f.monto,0);
@@ -3219,7 +3238,7 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, cfg, guard
         <div className="space-y-1">
           <Linea label="Con costo real del producto" val={`${C(analisis.ventaId)} · ${analisis.cobertura.toFixed(0)}% de las ventas`} />
           <Linea label="Margen real de esas ventas" val={margenId===null ? "—" : margenId.toFixed(1)+"%"} />
-          <Linea label={`Estimado al ${100-cfg.costoPct}% de margen`} val={C(analisis.sinId)} />
+          <Linea label={`Estimado al ${cfg.margenNoIdent != null ? cfg.margenNoIdent : 18}% de margen`} val={C(analisis.sinId)} />
         </div>
         <div className="h-2 bg-stone-200 rounded-full overflow-hidden mt-3 border border-stone-300">
           <div className="h-full bg-stone-900" style={{ width: Math.min(100, analisis.cobertura)+"%" }} />
@@ -3510,9 +3529,14 @@ function AjustesModal({ cfg, guardar, onClose }) {
     <Modal title="Ajustes" onClose={onClose}>
       <div className="mb-3"><Lbl>Meta de ventas del mes</Lbl><Inp inputMode="decimal" value={f.meta} onChange={(e)=>setF({...f, meta:num(e.target.value)})} className="font-mono" /></div>
       <div className="mb-3">
-        <Lbl>Costo del producto (%)</Lbl>
-        <Inp inputMode="decimal" value={f.costoPct} onChange={(e)=>setF({...f, costoPct:num(e.target.value)})} className="font-mono" />
-        <p className="text-[11px] text-stone-500 mt-1">Solo se usa para las ventas que no calzan con la tabla de precios.</p>
+        <Lbl>Impuesto sobre las compras (%)</Lbl>
+        <Inp inputMode="decimal" value={f.impuestoCompras||0} onChange={(e)=>setF({...f, impuestoCompras:num(e.target.value)})} className="font-mono" />
+        <p className="text-[11px] text-stone-500 mt-1">Régimen simplificado: el impuesto se calcula sobre las compras, no sobre las ventas. Se aparta en el reparto de fin de mes. Preguntale el factor exacto a tu contador.</p>
+      </div>
+      <div className="mb-3">
+        <Lbl>Margen para ventas sin costo conocido (%)</Lbl>
+        <Inp inputMode="decimal" value={f.margenNoIdent != null ? f.margenNoIdent : 18} onChange={(e)=>setF({...f, margenNoIdent:num(e.target.value)})} className="font-mono" />
+        <p className="text-[11px] text-stone-500 mt-1">Se usa solo mientras la venta no calce con la tabla de precios. Mejora solo conforme enlacés productos.</p>
       </div>
       <div className="mb-3">
         <Lbl>Saldo del banco al empezar a usar la app</Lbl>
@@ -3550,6 +3574,9 @@ function AjustesModal({ cfg, guardar, onClose }) {
       </div>
       <div className="mb-3">
         <Lbl>Costo de los artículos</Lbl>
+        <p className="text-[11px] text-stone-500 mb-1.5 leading-relaxed">
+          ◐ En régimen simplificado esto no se usa: el IVA de las compras no se acredita, así que el costo es siempre el total de la factura.
+        </p>
         <div className="grid grid-cols-2 gap-1.5">
           {[[true,"Sin IVA"],[false,"Con IVA"]].map(([v,l])=>(
             <button key={String(v)} onClick={()=>setF({...f, costoSinIVA:v})}
