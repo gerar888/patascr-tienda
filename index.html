@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black" />
 <meta name="theme-color" content="#F2F3F0" />
-<title>PRUEBA · Patas CR</title>
+<title>Patas CR · Control de tienda</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -99,53 +99,81 @@
 </style>
 </head>
 <body>
-<div style="background:#16211C;color:#F2F3F0;padding:8px 14px;font:600 12px/1.4 system-ui;letter-spacing:.06em;text-transform:uppercase">
-  ◐ Modo prueba · datos falsos · nada se guarda
-</div>
 <div id="root"></div>
 
 <!-- ============================================================
      PASO 1: pegá aquí la configuración de tu proyecto Firebase
      (Consola de Firebase → Configuración del proyecto → Tus apps → Web)
      ============================================================ -->
-<script>
-/* ============================================================
-   MODO PRUEBA — no hay Firebase, no hay nube, no hay login.
-   Todo vive en memoria y se borra al recargar la página.
-   Este archivo NO es el que va a GitHub.
-   ============================================================ */
-const DEMO = {"precios": [{"id": "p00", "nombre": "Dog chow raza pequeña", "peso": 25, "costo": 42500, "precioKilo": 2125, "precioSaco": 51000, "unidad": "kg", "actualizado": "2026-08-01"}, {"id": "p01", "nombre": "Nutrisource gato pollo", "peso": 10.9, "costo": 41200, "precioKilo": 4725, "precioSaco": 49450, "unidad": "kg", "actualizado": "2026-08-01"}, {"id": "p02", "nombre": "Balance cordero", "peso": 14.97, "costo": 22500, "precioKilo": 1875, "precioSaco": 27000, "unidad": "kg", "actualizado": "2026-08-01"}, {"id": "p03", "nombre": "Vic Doc", "peso": 6, "costo": 4800, "precioKilo": 1000, "precioSaco": 5750, "unidad": "kg", "actualizado": "2026-08-01"}, {"id": "p04", "nombre": "Amity premium gato pollo", "peso": 10, "costo": 31300, "precioKilo": 3900, "precioSaco": 37550, "unidad": "kg", "actualizado": "2026-08-01"}, {"id": "p05", "nombre": "Nutrisource salmón perro", "peso": 11.79, "costo": 40150, "precioKilo": 4250, "precioSaco": 48175, "unidad": "kg", "actualizado": "2026-08-01"}, {"id": "p06", "nombre": "Maxicat", "peso": 15, "costo": 20300, "precioKilo": 1700, "precioSaco": 24350, "unidad": "kg", "actualizado": "2026-08-01"}, {"id": "p07", "nombre": "First choice hipoalergénico", "peso": 5, "costo": 19000, "precioKilo": 4750, "precioSaco": 22800, "unidad": "kg", "actualizado": "2026-08-01"}, {"id": "p08", "nombre": "Balance senior perro", "peso": 14.97, "costo": 25400, "precioKilo": 2125, "precioSaco": 30475, "unidad": "kg", "actualizado": "2026-08-01"}, {"id": "p09", "nombre": "Amity adulto", "peso": 20, "costo": 20950, "precioKilo": 1300, "precioSaco": 25150, "unidad": "kg", "actualizado": "2026-08-01"}, {"id": "p10", "nombre": "Super perro", "peso": 15, "costo": 18050, "precioKilo": 1500, "precioSaco": 21650, "unidad": "kg", "actualizado": "2026-08-01"}, {"id": "p11", "nombre": "Balance adulto raza pequeña", "peso": 6, "costo": 9600, "precioKilo": 2000, "precioSaco": 11525, "unidad": "kg", "actualizado": "2026-08-01"}, {"id": "p12", "nombre": "Eureka", "peso": 25, "costo": 19190, "precioKilo": 950, "precioSaco": 23025, "unidad": "kg", "actualizado": "2026-08-01"}, {"id": "p13", "nombre": "Cat chow delimix", "peso": 15, "costo": 36757, "precioKilo": 3075, "precioSaco": 44100, "unidad": "kg", "actualizado": "2026-08-01"}, {"id": "p14", "nombre": "Shampoo Toons", "peso": 3, "costo": 4586, "precioKilo": 1900, "precioSaco": 5500, "unidad": "kg", "actualizado": "2026-08-01"}, {"id": "p15", "nombre": "Wau", "peso": 2, "costo": 4271, "precioKilo": 2675, "precioSaco": 5125, "unidad": "kg", "actualizado": "2026-08-01"}, {"id": "p16", "nombre": "Wau 2 en 1", "peso": 2, "costo": 4729, "precioKilo": 2950, "precioSaco": 5675, "unidad": "kg", "actualizado": "2026-08-01"}, {"id": "p17", "nombre": "Nutrisource control de peso", "peso": 11.8, "costo": 38962, "precioKilo": 4125, "precioSaco": 46750, "unidad": "kg", "actualizado": "2026-08-01"}, {"id": "p18", "nombre": "Nutrisource adulto", "peso": 11.8, "costo": 37019, "precioKilo": 3925, "precioSaco": 44425, "unidad": "kg", "actualizado": "2026-08-01"}, {"id": "p19", "nombre": "Nutrisource cordero", "peso": 11.8, "costo": 39539, "precioKilo": 4200, "precioSaco": 47450, "unidad": "kg", "actualizado": "2026-08-01"}, {"id": "p20", "nombre": "Nutri super performance", "peso": 18.14, "costo": 55024, "precioKilo": 3800, "precioSaco": 66025, "unidad": "kg", "actualizado": "2026-08-01"}, {"id": "p21", "nombre": "Ownat", "peso": 4, "costo": 11411, "precioKilo": 3575, "precioSaco": 13700, "unidad": "kg", "actualizado": "2026-08-01"}, {"id": "p90", "nombre": "Proplan gato esterilizado", "peso": 3, "costo": 14953, "precioKilo": 0, "precioSaco": 18700, "unidad": "kg", "actualizado": "2026-08-01"}], "ventas": [{"id": "v1", "creado": 1, "fecha": "2026-08-20", "producto": "Nutrisource salmón perro", "monto": 4300, "cliente": "Daisy", "pago": "Efectivo"}, {"id": "v2", "creado": 2, "fecha": "2026-08-21", "producto": "Amity adulto + Wau", "monto": 8300, "cliente": "", "pago": "SINPE"}, {"id": "v3", "creado": 3, "fecha": "2026-08-22", "producto": "Cat chow delimix", "monto": 7350, "cliente": "Marianela", "pago": "Tarjeta"}], "gastos": [{"id": "g2", "creado": 2, "fecha": "2026-08-18", "categoria": "Mercader\u00eda", "detalle": "Corpeco \u00b7 factura 8841", "monto": 250000, "pago": "SINPE", "credito": true, "pagado": false, "vence": "2026-09-17"}, {"id": "g1", "creado": 1, "fecha": "2026-08-05", "categoria": "Mercadería", "detalle": "Central Veterinaria", "monto": 180000, "pago": "SINPE"}], "fijos": [{"id": "f1", "nombre": "Alquiler del local", "monto": 30000, "categoria": "Alquiler", "dia": 1}, {"id": "f2", "nombre": "Agua y luz", "monto": 17000, "categoria": "Servicios", "dia": 1}], "enlaces": [], "cierres": [], "movimientos": [], "config": [{"id": "general", "meta": 1000000, "fondoCaja": 20000, "saldoBanco": 150000, "margenGranel": 20, "margenSaco": 15, "gananciaDef": 20, "regimen": "simplificado", "impuestoCompras": 0, "margenNoIdent": 18, "diasTarjeta": 1, "semanasColchon": 4, "excluirDomingos": true, "costoPct": 80, "tarifaIVA": 13, "inventarioIni": 0}]};
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {
+  initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
+  collection, doc, setDoc, deleteDoc, onSnapshot, writeBatch,
+  disableNetwork, enableNetwork
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import {
+  getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
-const _store = JSON.parse(JSON.stringify(DEMO));
-const _subs = {};
-const _emit = (col) => (_subs[col] || []).forEach((cb) => cb((_store[col] || []).map((x) => ({ ...x })), false));
+const firebaseConfig = {
+  apiKey: "AIzaSyACy5Q_HgwBBpMmiEaLWZBKgUWB55cLT1A",
+  authDomain: "patascr-tienda.firebaseapp.com",
+  projectId: "patascr-tienda",
+  storageBucket: "patascr-tienda.firebasestorage.app",
+  messagingSenderId: "540036190381",
+  appId: "1:540036190381:web:9736a05264926960e6b624"
+};
+
+const TIENDA = "patascr"; // si algún día abrís otra sucursal, cambiás esto
+const BASE_DATOS = "default"; // nombre de la base en Firestore (el del desplegable junto a "Database")
+
+const app = initializeApp(firebaseConfig);
+const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+  experimentalForceLongPolling: true
+}, BASE_DATOS);
+const auth = getAuth(app);
+
+const ruta = (col) => collection(db, "tiendas", TIENDA, col);
 
 window.FB = {
-  proyecto: "modo-prueba",
-  diagnostico: async () => ({ status: 200, cuerpo: "modo prueba" }),
-  entrar: async () => {},
-  salir: async () => { alert("En modo prueba no hay sesión que cerrar."); },
-  observarSesion: (cb) => { setTimeout(() => cb({ email: "prueba@patascr" }), 0); return () => {}; },
-  escuchar: (col, cb) => {
-    if (!_store[col]) _store[col] = [];
-    (_subs[col] = _subs[col] || []).push(cb);
-    setTimeout(() => cb(_store[col].map((x) => ({ ...x })), false), 0);
-    return () => { _subs[col] = _subs[col].filter((f) => f !== cb); };
+  proyecto: firebaseConfig.projectId,
+  diagnostico: async () => {
+    const u = auth.currentUser;
+    let token = null;
+    try { token = u ? await u.getIdToken() : null; } catch (e) {}
+    const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${BASE_DATOS}/documents/tiendas?pageSize=1`;
+    try {
+      const r = await fetch(url, { headers: token ? { Authorization: "Bearer " + token } : {} });
+      const cuerpo = await r.text();
+      return { status: r.status, cuerpo: cuerpo.slice(0, 400) };
+    } catch (e) {
+      return { status: 0, cuerpo: String(e.message || e) };
+    }
   },
-  guardar: async (col, obj) => {
-    if (!_store[col]) _store[col] = [];
-    const i = _store[col].findIndex((x) => x.id === obj.id);
-    if (i >= 0) _store[col][i] = { ..._store[col][i], ...obj }; else _store[col].push({ ...obj });
-    _emit(col);
+  entrar: (correo, clave) => signInWithEmailAndPassword(auth, correo, clave),
+  salir: () => signOut(auth),
+  observarSesion: (cb) => onAuthStateChanged(auth, cb),
+  escuchar: (col, cb, onErr) =>
+    onSnapshot(ruta(col), { includeMetadataChanges: true },
+      (snap) => { cb(snap.docs.map((d) => ({ ...d.data(), id: d.id })), snap.metadata.fromCache); },
+      (err) => { console.error("Error leyendo " + col, err); onErr && onErr(err); }
+    ),
+  guardar: (col, obj) => setDoc(doc(ruta(col), obj.id), obj, { merge: true }),
+  borrar: (col, id) => deleteDoc(doc(ruta(col), id)),
+  guardarLote: async (col, arr, onProgreso) => {
+    const TANDA = 20;
+    for (let i = 0; i < arr.length; i += TANDA) {
+      const trozo = arr.slice(i, i + TANDA);
+      const b = writeBatch(db);
+      trozo.forEach((o) => b.set(doc(ruta(col), o.id), o, { merge: true }));
+      await b.commit();
+      if (onProgreso) onProgreso(Math.min(i + TANDA, arr.length), arr.length);
+      await new Promise((r) => setTimeout(r, 150));
+    }
   },
-  borrar: async (col, id) => { _store[col] = (_store[col] || []).filter((x) => x.id !== id); _emit(col); },
-  guardarLote: async (col, arr, prog) => {
-    if (!_store[col]) _store[col] = [];
-    arr.forEach((o) => _store[col].push({ ...o }));
-    if (prog) prog(arr.length, arr.length);
-    _emit(col);
-  },
-  reconectar: async () => {},
+  reconectar: async () => { await disableNetwork(db); await enableNetwork(db); }
 };
 window.dispatchEvent(new Event("fb-listo"));
 </script>
