@@ -226,7 +226,7 @@ const porVencer = (lista) => lista.filter((g)=>g.credito && !g.pagado)
 
 const CATS = ["Mercadería", "Empaque", "Alquiler", "Servicios", "Transporte", "Marketing", "Impuestos", "Otro"];
 const PAGOS = ["Efectivo", "SINPE", "Tarjeta", "Otro"];
-const CFG_DEF = { id: "general", meta: 140000, costoPct: 80, excluirDomingos: true, margenGranel: 20, margenSaco: 15, fondoCaja: 20000, saldoBanco: 0, diasTarjeta: 1, inventarioIni: 0, semanasColchon: 4, colchonPctMin: 10, socios: 2, costoSinIVA: true, tarifaIVA: 13, gananciaDef: 20, regimen: "simplificado", impuestoCompras: 0, margenNoIdent: 18 };
+const CFG_DEF = { id: "general", meta: 140000, costoPct: 80, excluirDomingos: true, margenGranel: 20, margenSaco: 15, fondoCaja: 20000, saldoBanco: 0, diasTarjeta: 1, inventarioIni: 0, semanasColchon: 4, colchonPctMin: 10, socios: 2, retiroMensual: 0, costoSinIVA: true, tarifaIVA: 13, gananciaDef: 20, regimen: "simplificado", impuestoCompras: 0, margenNoIdent: 18 };
 
 /* ---------- convención única de IVA ----------
    Los costos se guardan SIN IVA (así vienen en el XML y así se acreditan).
@@ -2240,7 +2240,16 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
   const impuesto = merca * (impPct/100);
   const comprometido = reponer + fijosMensuales + aportePend + colchon + impuesto + porPagar;
   const libre = totalNegocio - comprometido;
-  const sugerido = Math.max(0, Math.min(libre, gananciaMes));
+  /* Lo retirable es el menor entre la plata libre y la ganancia que todavía no se ha sacado.
+     Retirar por encima de la ganancia es sacar capital de trabajo. */
+  const retiradoMes = movs
+    .filter((m)=>m.metodo === "retiro" && mesDe(m.fecha) === mesDe(hoyISO()))
+    .reduce((a,m)=>a + Math.abs(m.monto), 0);
+  const techoGanancia = Math.max(0, gananciaMes - retiradoMes);
+  const retirable = Math.max(0, Math.min(libre, techoGanancia));
+  const limita = libre < techoGanancia ? "plata" : "ganancia";
+  const metaRetiro = cfg.retiroMensual || 0;
+  const sugerido = retirable;
 
   /* cada movimiento que toca el banco, en orden, con saldo corriente */
   const libroBanco = useMemo(()=>{
@@ -2310,39 +2319,80 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
       {/* ================= DINERO DISPONIBLE HOY ================= */}
       <div className="rounded-[12px] bg-[var(--readout)] text-[#F2F3F0] p-5">
         <div className="flex items-baseline justify-between gap-3">
-          <span className="f-head text-[11px] text-[rgba(242,243,240,.55)]">Dinero disponible hoy</span>
+          <span className="f-head text-[11px] text-[rgba(242,243,240,.55)]">Se puede retirar hoy</span>
           <span className="f-mono text-[11px] text-[rgba(242,243,240,.45)]">{fmtFecha(hoyISO())}</span>
         </div>
 
         <div className="mt-3 flex items-baseline gap-3 flex-wrap">
           <span className="f-mono text-[15px] text-[rgba(242,243,240,.5)]">
-            {libre <= 0 ? "●" : sugerido < gananciaMes ? "◐" : "★"}
+            {retirable <= 0 ? "●" : metaRetiro > 0 && retirable < metaRetiro ? "◐" : "★"}
           </span>
           <span className="readout-val" style={{ fontSize: "clamp(32px,10vw,48px)" }}>
-            {C(Math.max(0, Math.round(libre)))}
+            {C(Math.floor(retirable))}
           </span>
         </div>
 
-        {libre > 0 && socios > 1 && (
-          <div className="f-mono text-[14px] text-[rgba(242,243,240,.7)] mt-1">
-            {C(Math.floor(libre/socios))} para cada uno · {socios} socios
+        {retirable > 0 && socios > 1 && (
+          <div className="f-mono text-[15px] text-[rgba(242,243,240,.75)] mt-1">
+            {C(Math.floor(retirable/socios))} para cada uno
           </div>
         )}
 
         <p className="text-[13px] text-[rgba(242,243,240,.75)] leading-relaxed mt-3">
-          {libre <= 0
-            ? `No hay nada retirable. Faltan ${C(Math.abs(libre))} para cubrir lo que ya está comprometido. Si hace falta plata, entra como aporte de socio.`
-            : libre > gananciaMes && gananciaMes > 0
-              ? `Están libres ${C(libre)}, pero la ganancia del mes va en ${C(gananciaMes)}. Sacar más que eso es tocar el capital con el que se compra la comida.`
-              : `Esta plata ya tiene descontado todo lo que hay que pagar. Sacarla no descuadra la operación.`}
+          {retirable <= 0
+            ? (libre <= 0
+                ? `No alcanza. Faltan ${C(Math.abs(libre))} para cubrir reposición, fijos, deudas y colchón. Este mes no se retira.`
+                : `Hay ${C(libre)} sueltos en el banco, pero el negocio ${gananciaMes <= 0 ? "no generó ganancia este mes" : `ya repartió los ${C(gananciaMes)} que ganó`}. Esa plata es capital de trabajo: sacarla descapitaliza la tienda.`)
+            : `Ya está descontado todo: reposición, gastos fijos, facturas de proveedor y colchón. Esto es ganancia limpia y sacarla no afecta la operación.`}
         </p>
 
-        {libre > 0 && (
+        {retirable > 0 && (
           <Btn kind="signal" className="btn-lg commit w-full mt-4" onClick={()=>setSocio("retiro")}>
             Registrar retiro
           </Btn>
         )}
+
+        {metaRetiro > 0 && (
+          <div className="mt-4 pt-3 border-t border-[rgba(242,243,240,.18)]">
+            <div className="flex items-baseline justify-between gap-3 mb-1.5">
+              <span className="f-head text-[10px] text-[rgba(242,243,240,.55)]">Meta del mes para la casa</span>
+              <span className="f-mono text-[12px] text-[rgba(242,243,240,.75)]">
+                {C(retiradoMes)} de {C(metaRetiro)}
+              </span>
+            </div>
+            <div className="h-2 bg-[rgba(242,243,240,.18)] rounded-full overflow-hidden">
+              <div className="h-full bg-[#F2F3F0]" style={{ width: Math.min(100, metaRetiro>0 ? retiradoMes/metaRetiro*100 : 0) + "%" }} />
+            </div>
+            <p className="text-[12px] text-[rgba(242,243,240,.6)] mt-2 leading-relaxed">
+              {retiradoMes >= metaRetiro
+                ? `★ La meta del mes ya está cubierta. Lo que sobre puede quedarse trabajando en la tienda.`
+                : retirable >= (metaRetiro - retiradoMes)
+                  ? `Faltan ${C(metaRetiro - retiradoMes)} para completarla y hoy hay con qué.`
+                  : `Faltan ${C(metaRetiro - retiradoMes)} y hoy solo alcanza para ${C(retirable)}. El resto tendrá que salir de las ventas de los próximos días.`}
+            </p>
+          </div>
+        )}
       </div>
+
+      {/* ---------- por qué ese número y no otro ---------- */}
+      <Card className="p-4">
+        <span className="f-head block text-[11px] mb-3">Por qué ese número</span>
+        <div className="space-y-1">
+          <Linea label="Plata libre después de apartar todo" val={C(Math.max(0, libre))} />
+          <Linea label={retiradoMes > 0 ? `Ganancia del mes que falta repartir` : "Ganancia real del mes"} val={C(techoGanancia)} />
+          <div className="pt-2 mt-1 border-t border-[var(--line-strong)]">
+            <Linea label="Se toma el menor de los dos" val={C(Math.floor(retirable))} fuerte />
+          </div>
+        </div>
+        <p className="text-[12px] text-[var(--muted)] mt-3 leading-relaxed">
+          {retirable <= 0
+            ? "Mientras alguno de los dos esté en cero, no hay nada que sacar sin debilitar la tienda."
+            : limita === "plata"
+              ? `Hoy manda la plata: el negocio ganó ${C(techoGanancia)} pero en efectivo solo hay ${C(libre)} sin comprometer. El resto de la ganancia está en sacos en la bodega y se vuelve plata conforme se venda.`
+              : `Hoy manda la ganancia: hay ${C(libre)} sueltos, pero el negocio solo generó ${C(techoGanancia)} este mes. Lo demás es capital de trabajo.`}
+          {retiradoMes > 0 && ` Este mes ya se retiraron ${C(retiradoMes)}.`}
+        </p>
+      </Card>
 
       {/* ---------- ¿se está reponiendo al ritmo que se vende? ---------- */}
       {costo30 > 0 && (
@@ -4240,6 +4290,11 @@ function AjustesModal({ cfg, guardar, onClose }) {
           <Lbl>Cuántos socios</Lbl>
           <Inp inputMode="numeric" value={f.socios != null ? f.socios : 2} onChange={(e)=>setF({...f, socios:num(e.target.value)})} className="font-mono" />
         </div>
+      </div>
+      <div className="mb-3">
+        <Lbl>Retiro mensual para la casa</Lbl>
+        <Inp inputMode="decimal" value={f.retiroMensual || 0} onChange={(e)=>setF({...f, retiroMensual:num(e.target.value)})} className="font-mono" />
+        <p className="text-[11px] text-stone-500 mt-1">Lo que el negocio debería aportar cada mes: luz, agua, lo que sea. Poné una cifra modesta y sostenible; la app te dice mes a mes si alcanza. Dejalo en cero si no querés fijar meta.</p>
       </div>
       <div className="mb-3">
         <Lbl>Colchón, en semanas de gastos fijos</Lbl>
