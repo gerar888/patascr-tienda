@@ -226,7 +226,7 @@ const porVencer = (lista) => lista.filter((g)=>g.credito && !g.pagado)
 
 const CATS = ["Mercadería", "Empaque", "Alquiler", "Servicios", "Transporte", "Marketing", "Impuestos", "Otro"];
 const PAGOS = ["Efectivo", "SINPE", "Tarjeta", "Otro"];
-const CFG_DEF = { id: "general", meta: 140000, costoPct: 80, excluirDomingos: true, margenGranel: 20, margenSaco: 15, fondoCaja: 20000, saldoBanco: 0, diasTarjeta: 1, inventarioIni: 0, semanasColchon: 4, costoSinIVA: true, tarifaIVA: 13, gananciaDef: 20, regimen: "simplificado", impuestoCompras: 0, margenNoIdent: 18 };
+const CFG_DEF = { id: "general", meta: 140000, costoPct: 80, excluirDomingos: true, margenGranel: 20, margenSaco: 15, fondoCaja: 20000, saldoBanco: 0, diasTarjeta: 1, inventarioIni: 0, semanasColchon: 4, colchonPctMin: 10, socios: 2, costoSinIVA: true, tarifaIVA: 13, gananciaDef: 20, regimen: "simplificado", impuestoCompras: 0, margenNoIdent: 18 };
 
 /* ---------- convención única de IVA ----------
    Los costos se guardan SIN IVA (así vienen en el XML y así se acreditan).
@@ -2221,8 +2221,21 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
 
   const fijosMensuales = (fijos||[]).reduce((a,f)=>a+f.monto,0);
   const semanas = cfg.semanasColchon != null ? cfg.semanasColchon : 4;
-  const colchon = fijosMensuales * (semanas/4);
-  const reponer = Math.max(0, costoVendido - merca);
+  const pctMin = cfg.colchonPctMin != null ? cfg.colchonPctMin : 10;
+  const colchonSemanas = fijosMensuales * (semanas/4);
+  const colchonPct = totalNegocio * (pctMin/100);
+  const colchon = Math.max(colchonSemanas, colchonPct);
+  const colchonPorPct = colchonPct > colchonSemanas;
+  const socios = Math.max(1, cfg.socios || 2);
+  /* ---------- reposición: lo que el proveedor ya se ganó y todavía no se le devolvió ----------
+     De cada colón vendido, la parte del costo no es ganancia: es para volver a comprar.
+     Se mide sobre 30 días móviles para que no se reinicie el día 1 de cada mes. */
+  const ventas30 = ventas.filter((v)=>v.fecha >= hace30).reduce((a,v)=>a+v.monto,0);
+  const costo30 = gananciaDe(an30, cfg).costo;
+  const merca30 = gastos.filter((g)=>g.categoria==="Mercadería" && g.fecha >= hace30).reduce((a,g)=>a+g.monto,0);
+  const pctCosto30 = ventas30 > 0 ? (costo30/ventas30)*100 : 0;
+  const reponer = Math.max(0, costo30 - merca30);
+  const alDia = costo30 > 0 ? Math.min(200, (merca30/costo30)*100) : 100;
   const impPct = cfg.impuestoCompras || 0;
   const impuesto = merca * (impPct/100);
   const comprometido = reponer + fijosMensuales + aportePend + colchon + impuesto + porPagar;
@@ -2293,6 +2306,139 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
         <KPI k="Por depositar" v={C(porDepositar)} sub={porDepositar>0 ? "◐ fuera del banco" : "○ al día"} />
         <KPI k="En el banco" v={C(banco)} sub={tarjetaPend>0 ? `${C(tarjetaPend)} de tarjeta sin acreditar` : "SINPE, tarjeta y depósitos"} />
       </div>
+
+      {/* ================= DINERO DISPONIBLE HOY ================= */}
+      <div className="rounded-[12px] bg-[var(--readout)] text-[#F2F3F0] p-5">
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="f-head text-[11px] text-[rgba(242,243,240,.55)]">Dinero disponible hoy</span>
+          <span className="f-mono text-[11px] text-[rgba(242,243,240,.45)]">{fmtFecha(hoyISO())}</span>
+        </div>
+
+        <div className="mt-3 flex items-baseline gap-3 flex-wrap">
+          <span className="f-mono text-[15px] text-[rgba(242,243,240,.5)]">
+            {libre <= 0 ? "●" : sugerido < gananciaMes ? "◐" : "★"}
+          </span>
+          <span className="readout-val" style={{ fontSize: "clamp(32px,10vw,48px)" }}>
+            {C(Math.max(0, Math.round(libre)))}
+          </span>
+        </div>
+
+        {libre > 0 && socios > 1 && (
+          <div className="f-mono text-[14px] text-[rgba(242,243,240,.7)] mt-1">
+            {C(Math.floor(libre/socios))} para cada uno · {socios} socios
+          </div>
+        )}
+
+        <p className="text-[13px] text-[rgba(242,243,240,.75)] leading-relaxed mt-3">
+          {libre <= 0
+            ? `No hay nada retirable. Faltan ${C(Math.abs(libre))} para cubrir lo que ya está comprometido. Si hace falta plata, entra como aporte de socio.`
+            : libre > gananciaMes && gananciaMes > 0
+              ? `Están libres ${C(libre)}, pero la ganancia del mes va en ${C(gananciaMes)}. Sacar más que eso es tocar el capital con el que se compra la comida.`
+              : `Esta plata ya tiene descontado todo lo que hay que pagar. Sacarla no descuadra la operación.`}
+        </p>
+
+        {libre > 0 && (
+          <Btn kind="signal" className="btn-lg commit w-full mt-4" onClick={()=>setSocio("retiro")}>
+            Registrar retiro
+          </Btn>
+        )}
+      </div>
+
+      {/* ---------- ¿se está reponiendo al ritmo que se vende? ---------- */}
+      {costo30 > 0 && (
+        <Card className="p-4">
+          <div className="flex items-baseline justify-between gap-3 mb-1">
+            <span className="f-head text-[11px]">Reposición · últimos 30 días</span>
+            <span className="f-mono text-[12px] text-[var(--muted)]">{alDia.toFixed(0)}% repuesto</span>
+          </div>
+          <p className="text-[12px] text-[var(--muted)] mb-3 leading-relaxed">
+            De cada ₡100 que entran por venta, <span className="font-medium text-[var(--ink)]">₡{pctCosto30.toFixed(0)} son del proveedor</span> y solo ₡{(100-pctCosto30).toFixed(0)} son ganancia. Esa parte hay que devolverla a la bodega.
+          </p>
+
+          <div className="space-y-1">
+            <Linea label="Se vendió" val={C(ventas30)} />
+            <Linea label="De eso, costo de la mercadería" val={C(costo30)} fuerte />
+            <Linea label="Ya se recompró" val={"− " + C(merca30)} />
+            <div className="pt-2 mt-1 border-t border-[var(--line-strong)]">
+              <Linea
+                label={reponer > 0 ? "● Falta reponer" : "○ Al día con la reposición"}
+                val={reponer > 0 ? C(reponer) : C(merca30 - costo30) + " de más"}
+                fuerte
+              />
+            </div>
+          </div>
+
+          <div className="h-2.5 bg-[rgba(22,33,28,.12)] rounded-full overflow-hidden mt-3 border border-[var(--line-strong)]">
+            <div className="h-full bg-[var(--ink)]" style={{ width: Math.min(100, alDia) + "%" }} />
+          </div>
+
+          <p className="text-[12px] text-[var(--muted)] mt-3 leading-relaxed">
+            {reponer > 0
+              ? `Se vendió ${C(costo30)} de mercadería y solo se repusieron ${C(merca30)}. Los ${C(reponer)} que faltan quedan apartados arriba: esa plata es del proveedor, no ganancia. Si se retira, la próxima compra no alcanza.`
+              : merca30 > costo30 * 1.3
+                ? `Se compró ${C(merca30 - costo30)} más de lo que se vendió. No está mal, pero es plata parqueada en sacos: revisá los días de inventario antes de seguir comprando.`
+                : "Las compras van al ritmo de las ventas. La bodega se mantiene y la ganancia es ganancia de verdad."}
+          </p>
+        </Card>
+      )}
+
+      {/* ---------- de dónde salió ese número ---------- */}
+      <Card className="p-4">
+        <div className="flex items-baseline justify-between gap-3 mb-3">
+          <span className="f-head text-[11px]">Cómo se llegó a ese número</span>
+          <span className="f-mono text-[12px] text-[var(--muted)]">{C(totalNegocio)} en total</span>
+        </div>
+
+        <div className="space-y-1">
+          <Linea label="Plata que existe hoy" val={C(totalNegocio)} fuerte />
+          <div className="pl-3 border-l-2 border-[var(--line-strong)] my-1.5 space-y-0.5">
+            <div className="flex justify-between text-[12px] text-[var(--muted)]">
+              <span>En la caja</span><span className="f-mono">{C(caja)}</span>
+            </div>
+            <div className="flex justify-between text-[12px] text-[var(--muted)]">
+              <span>Por depositar</span><span className="f-mono">{C(porDepositar)}</span>
+            </div>
+            <div className="flex justify-between text-[12px] text-[var(--muted)]">
+              <span>En el banco</span><span className="f-mono">{C(banco)}</span>
+            </div>
+          </div>
+
+          <div className="pt-2 mt-1 border-t border-[var(--line)] space-y-1">
+            <Linea label="Reponer lo vendido en 30 días" val={"− " + C(reponer)} />
+            <Linea label="Gastos fijos del mes que entra" val={"− " + C(fijosMensuales)} />
+            {impuesto > 0 && <Linea label={`Impuesto sobre compras (${impPct}%)`} val={"− " + C(impuesto)} />}
+            {porPagar > 0 && <Linea label={`Facturas de proveedor (${deudas.length})`} val={"− " + C(porPagar)} />}
+            {aportePend > 0 && <Linea label="Devolver aportes de socios" val={"− " + C(aportePend)} />}
+            <Linea label="Colchón de emergencia" val={"− " + C(colchon)} />
+          </div>
+
+          <div className="pt-2 mt-1 border-t border-[var(--line-strong)]">
+            <Linea label={libre >= 0 ? "Queda disponible" : "● Falta para cubrir lo comprometido"} val={C(Math.abs(libre))} fuerte />
+          </div>
+        </div>
+
+        <p className="text-[11px] text-[var(--muted)] mt-3 leading-relaxed">
+          El colchón toma el mayor entre {semanas} semanas de gastos fijos ({C(colchonSemanas)}) y el {pctMin}% de la plata total ({C(colchonPct)}).
+          Hoy manda {colchonPorPct ? "el porcentaje" : "el de semanas"}.
+        </p>
+
+        <div className="mt-3 pt-3 border-t border-[var(--line)] space-y-1">
+          <Linea label="Ganancia real del mes" val={C(gananciaMes)} />
+          <Linea label="Inventario en bodega, a costo" val={C(Math.max(0, inventario))} />
+          <Linea label="Alcanza para" val={inventario > 0 && diasInv != null ? `${Math.round(diasInv)} días` : "—"} />
+        </div>
+
+        <p className="text-[12px] text-[var(--muted)] mt-3 leading-relaxed">
+          {inventario <= 0
+            ? "◐ El contador de inventario todavía no refleja la bodega real: arranca en cero y hay mercadería vieja vendiéndose sin haber entrado. Converge solo en cuatro a seis semanas, o poné el conteo en Ajustes."
+            : diasInv != null && diasInv > 60
+              ? `● Hay ${Math.round(diasInv)} días de inventario. Eso es plata parqueada en sacos: bajá el ritmo de compra y esa plata vuelve al banco sola.`
+              : diasInv != null && diasInv < 15
+                ? `● Solo ${Math.round(diasInv)} días de inventario. Vas a quebrar existencias; conviene comprar antes de que se caiga una venta.`
+                : "○ Entre 15 y 60 días de inventario es sano para alimento."}
+        </p>
+      </Card>
+
 
       {meses.length>1 && (
         <div className="flex gap-2 overflow-x-auto pb-1">
@@ -2395,117 +2541,6 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
               : `Este mes se vendió ${C(enInventario)} más de lo que se repuso, así que quedó más plata de la que corresponde a la ganancia. Ese inventario hay que volver a comprarlo.`}
         </p>
       </Card>
-
-      <Card className="p-4">
-        <div className="flex justify-between items-baseline mb-1">
-          <span className="f-head text-[11px]">Reparto de fin de mes</span>
-          <span className="f-mono text-[12px] text-[var(--muted)]">{C(totalNegocio)} en total</span>
-        </div>
-        <p className="text-[12px] text-[var(--muted)] mb-3 leading-relaxed">
-          De toda la plata del negocio, cuánta ya tiene dueño y cuánta se puede sacar.
-        </p>
-
-        <div className="space-y-1">
-          <Linea label="Plata disponible hoy" val={C(totalNegocio)} fuerte />
-          <div className="pt-1.5 mt-1 border-t border-[var(--line)] space-y-1">
-            <Linea label="Reponer lo que se vendió y no se recompró" val={"− " + C(reponer)} />
-            <Linea label="Gastos fijos del mes que entra" val={"− " + C(fijosMensuales)} />
-            {porPagar > 0 && <Linea label={`Facturas de proveedor por pagar (${deudas.length})`} val={"− " + C(porPagar)} />}
-            {aportePend > 0 && <Linea label="Devolver aportes de socios" val={"− " + C(aportePend)} />}
-            {impuesto > 0 && <Linea label={`Impuesto sobre compras (${impPct}%)`} val={"− " + C(impuesto)} />}
-            <Linea label={`Colchón de ${semanas} semanas`} val={"− " + C(colchon)} />
-          </div>
-          <div className="pt-2 mt-1 border-t border-[var(--line-strong)]">
-            <Linea label={libre >= 0 ? "Queda libre" : "● Falta para cubrir lo comprometido"} val={C(Math.abs(libre))} fuerte />
-          </div>
-        </div>
-
-        <div className="mt-4 rounded-[10px] border-2 border-[var(--ink)] px-3 py-3">
-          <div className="flex items-baseline justify-between gap-3">
-            <span className="f-head text-[10px] text-[var(--muted)]">Se puede retirar</span>
-            <span className="f-mono text-[22px] font-semibold">{C(Math.round(sugerido))}</span>
-          </div>
-          <p className="text-[12px] text-[var(--muted)] leading-relaxed mt-2">
-            {libre < 0
-              ? `No hay de dónde. Faltan ${C(Math.abs(libre))} para cubrir reposición, fijos y colchón. Este mes no se retira; si hace falta plata, entra como aporte y se anota.`
-              : sugerido <= 0
-                ? gananciaMes <= 0
-                  ? `Hay ${C(libre)} libres en el banco, pero el mes cerró ${gananciaMes < 0 ? "en pérdida" : "en cero"}. Esa plata es capital de trabajo, no ganancia: sacarla es descapitalizar la tienda.`
-                  : "No hay plata libre suficiente todavía."
-                : sugerido < gananciaMes
-                  ? `La ganancia del mes fue ${C(gananciaMes)}, pero solo ${C(Math.round(sugerido))} están disponibles en plata: el resto está en sacos en la bodega. Se retira lo que hay.`
-                  : `La ganancia del mes fue ${C(gananciaMes)} y está disponible en plata. Lo demás queda comprometido.`}
-          </p>
-          {sugerido > 0 && (
-            <Btn kind="ghost" className="w-full mt-3" onClick={()=>setSocio("retiro")}>Registrar retiro</Btn>
-          )}
-        </div>
-
-        <div className="mt-4 pt-3 border-t border-[var(--line)] space-y-1">
-          <Linea label="Inventario en bodega, a costo" val={C(Math.max(0, inventario))} />
-          <Linea
-            label="Alcanza para"
-            val={inventario > 0 && diasInv != null ? `${Math.round(diasInv)} días` : "—"}
-          />
-          {aportes > 0 && <Linea label="Aportes de socios, acumulado" val={C(aportes)} />}
-          {devueltos > 0 && <Linea label="Ya devuelto o retirado" val={C(devueltos)} />}
-        </div>
-
-        <p className="text-[12px] text-[var(--muted)] mt-3 leading-relaxed">
-          {inventario <= 0
-            ? "◐ El contador de inventario todavía no refleja la bodega real: arranca en cero y hay mercadería vieja vendiéndose sin haber entrado. Va a converger solo en cuatro a seis semanas, o podés poner el conteo en Ajustes."
-            : diasInv != null && diasInv > 60
-              ? `● Hay ${Math.round(diasInv)} días de inventario. Eso es plata parqueada en sacos: bajá el ritmo de compra hasta que llegue cerca de 45 días y esa plata vuelve al banco sola.`
-              : diasInv != null && diasInv < 15
-                ? `● Solo ${Math.round(diasInv)} días de inventario. Vas a quebrar existencias; conviene comprar antes de que se caiga una venta.`
-                : `○ Entre 15 y 60 días de inventario es sano para alimento. No hay plata de más parqueada.`}
-        </p>
-      </Card>
-
-      {deudas.length > 0 && (
-        <Card className="p-4">
-          <div className="flex items-baseline justify-between gap-3 mb-1">
-            <span className="f-head text-[11px]">Facturas por pagar</span>
-            <span className="f-mono text-[13px] font-semibold">{C(porPagar)}</span>
-          </div>
-          <p className="text-[12px] text-[var(--muted)] mb-3">
-            Mercadería que ya llegó pero todavía no se pagó. Esta plata está en el banco pero no es tuya.
-          </p>
-
-          {deudas.map((g)=>{
-            const d = g.dias;
-            const sev = d == null ? "◐" : d < 0 ? "●" : d <= 7 ? "●" : d <= 15 ? "◐" : "○";
-            return (
-              <div key={g.id} className="py-2 border-b border-[var(--line)] last:border-0 flex items-baseline justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-[13px] truncate"><span className="text-[var(--muted)] mr-1.5">{sev}</span>{g.detalle || g.categoria}</div>
-                  <div className="text-[11px] text-[var(--muted)] f-mono">
-                    {g.vence ? `vence ${fmtFecha(g.vence)} · ` : "sin fecha · "}
-                    {d == null ? "" : d < 0 ? `${Math.abs(d)} días vencida` : d === 0 ? "vence hoy" : `en ${d} días`}
-                  </div>
-                </div>
-                <div className="text-right shrink-0">
-                  <div className="f-mono text-[13px]">{C(g.monto)}</div>
-                  <button onClick={()=>setPagando(g)} className="f-head text-[9px] text-[var(--signal)] min-h-[32px]">Marcar pagada</button>
-                </div>
-              </div>
-            );
-          })}
-
-          {(()=>{
-            const pronto = deudas.filter((g)=>g.dias != null && g.dias <= 7).reduce((a,g)=>a+g.monto,0);
-            const disponible = caja + porDepositar + banco;
-            if (pronto <= 0) return null;
-            return (
-              <p className="text-[12px] leading-relaxed mt-3 pt-3 border-t border-[var(--line)]">
-                {pronto > disponible
-                  ? `● Vencen ${C(pronto)} en los próximos 7 días y solo hay ${C(disponible)} disponible. Falta plata: no compres más ni retirés nada hasta cubrirlo.`
-                  : `◐ Vencen ${C(pronto)} en los próximos 7 días. Queda cubierto con lo que hay, pero esa plata ya tiene dueño.`}
-              </p>
-            );
-          })()}
-        </Card>
-      )}
 
       <div className="grid lg:grid-cols-2 gap-4 items-start">
       <Card className="p-4">
@@ -4195,6 +4230,16 @@ function AjustesModal({ cfg, guardar, onClose }) {
         <Lbl>Inventario en bodega al empezar a contarlo</Lbl>
         <Inp inputMode="decimal" value={f.inventarioIni||0} onChange={(e)=>setF({...f, inventarioIni:num(e.target.value)})} className="font-mono" />
         <p className="text-[11px] text-stone-500 mt-1">A precio de costo. Si lo dejás en cero, el contador arranca desde hoy y va a quedar corto unas semanas, hasta que se venda la mercadería vieja.</p>
+      </div>
+      <div className="grid grid-cols-2 gap-3 mb-3">
+        <div>
+          <Lbl>Colchón mínimo (% del total)</Lbl>
+          <Inp inputMode="decimal" value={f.colchonPctMin != null ? f.colchonPctMin : 10} onChange={(e)=>setF({...f, colchonPctMin:num(e.target.value)})} className="font-mono" />
+        </div>
+        <div>
+          <Lbl>Cuántos socios</Lbl>
+          <Inp inputMode="numeric" value={f.socios != null ? f.socios : 2} onChange={(e)=>setF({...f, socios:num(e.target.value)})} className="font-mono" />
+        </div>
       </div>
       <div className="mb-3">
         <Lbl>Colchón, en semanas de gastos fijos</Lbl>
