@@ -2244,6 +2244,13 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
   const depositos = movs.filter((m)=>m.tipo==="deposito");
   const depositado = depositos.reduce((a,m)=>a+m.monto,0);
   const porDepositar = retirado - depositado;
+  /* Solo un pendiente positivo es plata que existe fuera del banco. Si sale negativo
+     es un descuadre de registro: esa plata ya está contada dentro del saldo bancario. */
+  const pendienteReal = Math.max(0, porDepositar);
+  const descuadre = porDepositar < 0 ? -porDepositar : 0;
+  /* para explicar un pendiente negativo: cuántos días hubo efectivo sin cerrar caja */
+  const cierresConRetiro = cierres.filter((c)=>(c.retiro||0) > 0).length;
+  const diasConVentaEfectivo = new Set(ventas.filter((v)=>v.pago==="Efectivo").map((v)=>v.fecha)).size;
 
   /* --- banco --- */
   const ajustes = movs.filter((m)=>m.tipo==="ajuste");
@@ -2258,7 +2265,7 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
   const tarjetaPend = ventas.filter((v)=>v.pago==="Tarjeta" && v.fecha > corteISO).reduce((a,v)=>a+v.monto,0);
   const bancoAcreditado = banco - tarjetaPend;
 
-  const totalNegocio = caja + porDepositar + banco;
+  const totalNegocio = caja + pendienteReal + banco;
 
   /* ---------- movimiento del mes ---------- */
   const meses = useMemo(()=>[...new Set([...ventas,...gastos].map((x)=>mesDe(x.fecha)))].sort().reverse(), [ventas,gastos]);
@@ -2418,7 +2425,7 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <KPI k="Total del negocio" v={C(totalNegocio)} sub="caja + pendiente + banco" oscuro />
         <KPI k="En la caja" v={C(caja)} sub={monedas>0 ? `incluye ${C(monedas)} en monedas` : (ultimoCierre ? "desde el " + fmtFecha(ultimoCierre) : "sin cierres")} />
-        <KPI k="Por depositar" v={C(porDepositar)} sub={porDepositar>0 ? "◐ fuera del banco" : "○ al día"} />
+        <KPI k="Por depositar" v={C(pendienteReal)} sub={porDepositar > 0 ? "◐ fuera del banco" : descuadre > 0 ? `● ${C(descuadre)} de más registrados` : "○ al día"} />
         <KPI k="En el banco" v={C(banco)} sub={tarjetaPend>0 ? `${C(tarjetaPend)} de tarjeta sin acreditar` : "SINPE, tarjeta y depósitos"} />
       </div>
 
@@ -2601,7 +2608,7 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
               <span>En la caja</span><span className="f-mono">{C(caja)}</span>
             </div>
             <div className="flex justify-between text-[12px] text-[var(--muted)]">
-              <span>Por depositar</span><span className="f-mono">{C(porDepositar)}</span>
+              <span>Por depositar</span><span className="f-mono">{C(pendienteReal)}</span>
             </div>
             <div className="flex justify-between text-[12px] text-[var(--muted)]">
               <span>En el banco</span><span className="f-mono">{C(banco)}</span>
@@ -2776,15 +2783,41 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
             </div>
           </div>
 
-          <div className="flex justify-between items-baseline">
-            <div>
-              <div className="text-sm font-medium">
-                {porDepositar > 0 && <span className="text-stone-500 mr-1.5">◐</span>}
-                Por depositar
+          <div>
+            <div className="flex justify-between items-baseline">
+              <div>
+                <div className="text-sm font-medium">
+                  {porDepositar !== 0 && <span className="text-stone-500 mr-1.5">{porDepositar > 0 ? "◐" : "●"}</span>}
+                  Por depositar
+                </div>
+                <div className="text-[11px] text-stone-500">
+                  {porDepositar > 0 ? "retirado de la caja y aún fuera del banco" : porDepositar < 0 ? "más depósitos que retiros de caja" : "todo depositado"}
+                </div>
               </div>
-              <div className="text-[11px] text-stone-500">{porDepositar > 0 ? "retirado de la caja y aún fuera del banco" : "todo depositado"}</div>
+              <span className="font-mono tabular-nums text-lg">{C(pendienteReal)}</span>
             </div>
-            <span className="font-mono tabular-nums text-lg">{C(porDepositar)}</span>
+
+            {porDepositar < 0 && (
+              <div className="mt-2 border border-[var(--line-strong)] rounded-[8px] p-3">
+                <div className="text-[13px] font-medium mb-1.5">● Hay {C(descuadre)} de más en depósitos</div>
+                <div className="space-y-1 mb-2">
+                  <Linea label="Salió de la caja al cerrar" val={C(retirado)} />
+                  <Linea label="Se registró como depósito" val={"− " + C(depositado)} />
+                  <div className="pt-1.5 mt-1 border-t border-[var(--line)]">
+                    <Linea label="Sobran depósitos por" val={C(descuadre)} fuerte />
+                  </div>
+                </div>
+                <p className="text-[12px] text-[var(--muted)] leading-relaxed mb-2">
+                  Esa plata sí existe y ya está contada dentro del saldo del banco, así que no se resta de ningún lado.
+                  Lo único que pasa es que el contador de pendientes quedó desviado.
+                </p>
+                <p className="text-[12px] text-[var(--muted)] leading-relaxed">
+                  Pasa por dos razones. Una: plata que entró al banco sin pasar por la caja — la de la pulpería, por ejemplo — se registró
+                  como depósito en vez de ajuste. Se arregla borrando ese movimiento y volviéndolo a meter con "Cuadrar banco → Sumar o restar".
+                  {cierresConRetiro < diasConVentaEfectivo && ` Dos: hay ${diasConVentaEfectivo - cierresConRetiro} días con venta en efectivo sin cierre de caja, así que ese retiro nunca se registró.`}
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="flex justify-between items-baseline">
@@ -2879,8 +2912,8 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
 
       {depositar && (
         <DepositoModal
-          sugerido={Math.max(0, porDepositar)}
-          porDepositar={porDepositar}
+          sugerido={pendienteReal}
+          porDepositar={pendienteReal}
           guardar={guardar}
           usuario={usuario}
           aviso={aviso}
