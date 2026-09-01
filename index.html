@@ -409,6 +409,25 @@ function useColeccion(col, sesion) {
   return [datos, cache, error];
 }
 
+class Limite extends React.Component {
+  constructor(p){ super(p); this.state = { err: null }; }
+  static getDerivedStateFromError(err){ return { err }; }
+  componentDidCatch(err){ console.error("Falló la pestaña:", err); }
+  componentDidUpdate(prev){ if (prev.tab !== this.props.tab && this.state.err) this.setState({ err: null }); }
+  render(){
+    if (!this.state.err) return this.props.children;
+    return (
+      <div className="border-2 border-[var(--ink)] rounded-lg p-4 bg-white">
+        <div className="f-head text-[11px] mb-2">● Esta pantalla no se pudo mostrar</div>
+        <p className="text-[13px] text-[var(--muted)] leading-relaxed mb-2">
+          El resto de la app sigue funcionando y los datos están intactos. Cambiá de pestaña y volvé a entrar.
+        </p>
+        <pre className="f-mono text-[10px] text-[var(--muted)] whitespace-pre-wrap">{String(this.state.err && this.state.err.message || this.state.err)}</pre>
+      </div>
+    );
+  }
+}
+
 /* ================= App ================= */
 function App() {
   const [fbListo, setFbListo] = useState(!!window.FB);
@@ -517,12 +536,14 @@ function App() {
               )}
             </div>
           )}
+          <Limite tab={tab}>
           {tab === "registrar" && <Registrar ventas={ventas} gastos={gastos} fijos={fijos} precios={precios} enlaces={enlaces} cierres={cierres} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={sesion.email} />}
           {tab === "historial" && <Historial ventas={ventas} gastos={gastos} guardar={guardar} borrar={borrar} aviso={aviso} />}
           {tab === "dinero" && <Dinero ventas={ventas} gastos={gastos} cierres={cierres} movs={movs} precios={precios} enlaces={enlaces} fijos={fijos} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={sesion.email} />}
           {tab === "analisis" && <Analisis ventas={ventas} gastos={gastos} precios={precios} enlaces={enlaces} cierres={cierres} cfg={cfg} />}
           {tab === "precios" && <Precios precios={precios} enlaces={enlaces} gastos={gastos} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={sesion.email} />}
           {tab === "reportes" && <Reportes ventas={ventas} gastos={gastos} precios={precios} fijos={fijos} enlaces={enlaces} cierres={cierres} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} correo={sesion.email} />}
+          </Limite>
         </main>
       </div>
 
@@ -2182,6 +2203,37 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
   const deudas = useMemo(()=>porVencer(gastos), [gastos]);
   const porPagar = deudas.reduce((a,g)=>a+g.monto,0);
 
+  /* ---------- reserva de impuestos ----------
+     Se devenga con cada compra y se paga por trimestre. La plata se aparta
+     desde el día que entra la factura, no el día que hay que declarar. */
+  const impuestos = useMemo(()=>{
+    const porTrim = {};
+    gastos.forEach((g)=>{
+      const imp = impuestoDe(g);
+      if (imp <= 0) return;
+      const t = trimestreDe(g.fecha);
+      if (!porTrim[t]) porTrim[t] = { trim: t, base: 0, renta: 0, iva: 0, total: 0, pagado: 0 };
+      const f = FACTOR_IVA[tarifaDe(g)] || 0;
+      porTrim[t].base += g.monto;
+      porTrim[t].renta += g.monto * FACTOR_RENTA;
+      porTrim[t].iva += g.monto * f;
+      porTrim[t].total += imp;
+    });
+    gastos.filter((g)=>g.categoria === "Impuestos").forEach((g)=>{
+      const t = g.trimestre || trimestreDe(g.fecha);
+      if (!porTrim[t]) porTrim[t] = { trim: t, base: 0, renta: 0, iva: 0, total: 0, pagado: 0 };
+      porTrim[t].pagado += g.monto;
+    });
+    return Object.values(porTrim)
+      .map((x)=>({ ...x, falta: Math.max(0, x.total - x.pagado), vence: venceTrimestre(x.trim) }))
+      .sort((a,b)=>a.trim < b.trim ? -1 : 1);
+  }, [gastos]);
+
+  const impuesto = impuestos.reduce((a,x)=>a + x.falta, 0);
+  const trimActual = trimestreDe(hoyISO());
+  const impActual = impuestos.find((x)=>x.trim === trimActual);
+  const impVencidos = impuestos.filter((x)=>x.falta > 0 && x.vence < hoyISO());
+
   const abierto = (m) => !dentroDelCierre(m, ultimo);
   const efeEntra = ventas.filter((v)=>v.pago==="Efectivo" && abierto(v)).reduce((a,v)=>a+v.monto,0);
   const efeSale = gastosPlata.filter((g)=>g.pago==="Efectivo" && abierto(g)).reduce((a,g)=>a+g.monto,0);
@@ -2291,36 +2343,7 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
   const pctCosto30 = ventas30 > 0 ? (costo30/ventas30)*100 : 0;
   const reponer = Math.max(0, costo30 - merca30);
   const alDia = costo30 > 0 ? Math.min(200, (merca30/costo30)*100) : 100;
-  /* ---------- reserva de impuestos ----------
-     Se devenga con cada compra y se paga por trimestre. La plata se aparta
-     desde el día que entra la factura, no el día que hay que declarar. */
-  const impuestos = useMemo(()=>{
-    const porTrim = {};
-    gastos.forEach((g)=>{
-      const imp = impuestoDe(g);
-      if (imp <= 0) return;
-      const t = trimestreDe(g.fecha);
-      if (!porTrim[t]) porTrim[t] = { trim: t, base: 0, renta: 0, iva: 0, total: 0, pagado: 0 };
-      const f = FACTOR_IVA[tarifaDe(g)] || 0;
-      porTrim[t].base += g.monto;
-      porTrim[t].renta += g.monto * FACTOR_RENTA;
-      porTrim[t].iva += g.monto * f;
-      porTrim[t].total += imp;
-    });
-    gastos.filter((g)=>g.categoria === "Impuestos").forEach((g)=>{
-      const t = g.trimestre || trimestreDe(g.fecha);
-      if (!porTrim[t]) porTrim[t] = { trim: t, base: 0, renta: 0, iva: 0, total: 0, pagado: 0 };
-      porTrim[t].pagado += g.monto;
-    });
-    return Object.values(porTrim)
-      .map((x)=>({ ...x, falta: Math.max(0, x.total - x.pagado), vence: venceTrimestre(x.trim) }))
-      .sort((a,b)=>a.trim < b.trim ? -1 : 1);
-  }, [gastos]);
 
-  const impuesto = impuestos.reduce((a,x)=>a + x.falta, 0);
-  const trimActual = trimestreDe(hoyISO());
-  const impActual = impuestos.find((x)=>x.trim === trimActual);
-  const impVencidos = impuestos.filter((x)=>x.falta > 0 && x.vence < hoyISO());
   const comprometido = reponer + fijosMensuales + aportePend + colchon + impuesto + porPagar;
   const libre = totalNegocio - comprometido;
   /* Lo retirable es el menor entre la plata libre y la ganancia que todavía no se ha sacado.
