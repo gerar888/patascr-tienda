@@ -214,6 +214,33 @@ const num = (v) => {
   return neg ? -n : n;
 };
 
+/* ---------- impuestos del régimen simplificado ----------
+   Se paga sobre las COMPRAS, no sobre las ventas, y se declara por trimestre.
+   Renta 1% de toda compra + IVA según la tarifa con que vino la factura. */
+const FACTOR_RENTA = 0.01;
+const FACTOR_IVA = { "13": 0.02, "2": 0.0033, "1": 0.00125, "0": 0 };
+const TARIFAS = [["13","13%"],["2","2%"],["1","1%"],["0","Exenta"]];
+/* categorías que cuentan como compra para el impuesto */
+const ES_COMPRA = (g) => g.categoria === "Mercadería" || g.categoria === "Empaque";
+const tarifaDe = (g) => (g.tarifa != null ? String(g.tarifa) : (ES_COMPRA(g) ? "13" : "0"));
+const impuestoDe = (g) => {
+  if (!ES_COMPRA(g)) return 0;
+  const f = FACTOR_IVA[tarifaDe(g)] != null ? FACTOR_IVA[tarifaDe(g)] : 0;
+  return g.monto * (FACTOR_RENTA + f);
+};
+/* trimestre calendario al que pertenece una fecha */
+const trimestreDe = (iso) => {
+  const [y,m] = (iso||"").split("-").map(Number);
+  return `${y}-T${Math.floor((m-1)/3)+1}`;
+};
+const venceTrimestre = (t) => {
+  const [y,q] = t.split("-T").map(Number);
+  const mesFin = q*3;                       /* declara dentro de los 15 días siguientes */
+  const yy = mesFin === 12 ? y+1 : y;
+  const mm = mesFin === 12 ? 1 : mesFin+1;
+  return `${yy}-${String(mm).padStart(2,"0")}-15`;
+};
+
 /* ---------- compras a crédito ----------
    La mercadería llega hoy pero la plata sale cuando se paga. Para inventario
    cuenta desde que entra; para el banco y la caja, solo cuando se paga. */
@@ -1362,6 +1389,7 @@ function GastoForm({ gastos, fijos, precios, enlaces, cfg, guardar, borrar, avis
   const [verFijos, setVerFijos] = useState(false);
   const [credito, setCredito] = useState(false);
   const [vence, setVence] = useState("");
+  const [tarifa, setTarifa] = useState("13");
 
   /* por defecto, 30 días desde la fecha de la factura */
   const venceSugerido = useMemo(()=>{
@@ -1375,6 +1403,8 @@ function GastoForm({ gastos, fijos, precios, enlaces, cfg, guardar, borrar, avis
   const registrar = async () => {
     const m = num(monto);
     const doc = { id: UID(), creado: Date.now(), fecha, categoria: cat, detalle: detalle.trim(), monto: m, pago, usuario };
+    if (cat === "Mercadería" || cat === "Empaque") doc.tarifa = tarifa;
+    if (cat === "Impuestos") doc.trimestre = trimestreDe(fecha);
     if (credito) { doc.credito = true; doc.pagado = false; doc.vence = vence || venceSugerido; }
     await guardar("gastos", doc);
     setDetalle(""); setMonto(""); setVence("");
@@ -1394,6 +1424,26 @@ function GastoForm({ gastos, fijos, precios, enlaces, cfg, guardar, borrar, avis
             <button key={c} onClick={()=>setCat(c)} className={"px-2.5 py-1.5 rounded-full border text-[12px] " + (cat===c ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{c}</button>
           ))}
         </div>
+        {(cat === "Mercadería" || cat === "Empaque") && (
+          <div className="mb-3">
+            <Lbl>IVA con que vino la factura</Lbl>
+            <div className="grid grid-cols-4 gap-1.5">
+              {TARIFAS.map(([v,l])=>(
+                <button key={v} onClick={()=>setTarifa(v)} aria-pressed={tarifa===v}
+                  className={"f-head text-[10px] min-h-[44px] rounded-[8px] border " + (tarifa===v
+                    ? "bg-[var(--ink)] text-[#F2F3F0] border-[var(--ink)]"
+                    : "bg-white text-[var(--ink)] border-[var(--line-strong)]")}>{l}</button>
+              ))}
+            </div>
+            {num(monto) > 0 && (
+              <p className="text-[12px] text-[var(--muted)] mt-1.5 f-mono">
+                Impuesto que genera esta compra: {C(num(monto) * (FACTOR_RENTA + (FACTOR_IVA[tarifa]||0)))}
+                <span className="text-[var(--muted)]"> · se aparta solo</span>
+              </p>
+            )}
+          </div>
+        )}
+
         <div className="mb-3">
           <Lbl>Proveedor o detalle</Lbl>
           <Inp list="provs" value={detalle} onChange={(e)=>setDetalle(e.target.value)} placeholder="Central Veterinaria, factura 1023" />
@@ -2167,8 +2217,9 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
   const ventasMes = vMes.reduce((a,v)=>a+v.monto,0);
   const merca = gMes.filter((g)=>g.categoria==="Mercadería").reduce((a,g)=>a+g.monto,0);
   const fijosMes = gMes.filter((g)=>g.fijoId).reduce((a,g)=>a+g.monto,0);
-  const otrosMes = gMes.filter((g)=>g.categoria!=="Mercadería" && !g.fijoId).reduce((a,g)=>a+g.monto,0);
-  const gastosMesTot = merca + fijosMes + otrosMes;
+  const impMes = gMes.filter((g)=>g.categoria==="Impuestos" && !g.fijoId).reduce((a,g)=>a+g.monto,0);
+  const otrosMes = gMes.filter((g)=>g.categoria!=="Mercadería" && g.categoria!=="Impuestos" && !g.fijoId).reduce((a,g)=>a+g.monto,0);
+  const gastosMesTot = merca + fijosMes + otrosMes + impMes;
 
   /* la plata de meses posteriores no cuenta para reconstruir el saldo inicial */
   const posterior = ventas.filter((v)=>mesDe(v.fecha)>mes).reduce((a,v)=>a+v.monto,0)
@@ -2184,6 +2235,7 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
     { label: "Gastos|fijos", valor: fijosMes, tipo: "baja" },
     { label: "Otros|gastos", valor: otrosMes, tipo: "baja" },
   ];
+  if (impMes > 0) pasos.push({ label: "Impuestos|pagados", valor: impMes, tipo: "baja" });
   if (Math.abs(ajMes) > 0.5) pasos.push({ label: "Ajustes|del banco", valor: Math.abs(ajMes), tipo: ajMes>0 ? "sube" : "baja" });
   pasos.push({ label: "Con lo que|se quedó", valor: saldoFin, tipo: "total" });
 
@@ -2191,7 +2243,10 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
   const esMesActual = mes === mesDe(hoyISO());
   if (esMesActual && porPagar > 0) {
     pasos.push({ label: "Facturas|por pagar", valor: porPagar, tipo: "baja", proyeccion: true });
-    pasos.push({ label: "Queda|de verdad", valor: saldoFin - porPagar, tipo: "total", proyeccion: true });
+  }
+  if (esMesActual && impuesto > 0) pasos.push({ label: "Impuestos|devengados", valor: impuesto, tipo: "baja", proyeccion: true });
+  if (esMesActual && (porPagar > 0 || impuesto > 0)) {
+    pasos.push({ label: "Queda|de verdad", valor: saldoFin - porPagar - impuesto, tipo: "total", proyeccion: true });
   }
 
   /* ---------- de esa plata, cuánto es ganancia ---------- */
@@ -2236,8 +2291,36 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
   const pctCosto30 = ventas30 > 0 ? (costo30/ventas30)*100 : 0;
   const reponer = Math.max(0, costo30 - merca30);
   const alDia = costo30 > 0 ? Math.min(200, (merca30/costo30)*100) : 100;
-  const impPct = cfg.impuestoCompras || 0;
-  const impuesto = merca * (impPct/100);
+  /* ---------- reserva de impuestos ----------
+     Se devenga con cada compra y se paga por trimestre. La plata se aparta
+     desde el día que entra la factura, no el día que hay que declarar. */
+  const impuestos = useMemo(()=>{
+    const porTrim = {};
+    gastos.forEach((g)=>{
+      const imp = impuestoDe(g);
+      if (imp <= 0) return;
+      const t = trimestreDe(g.fecha);
+      if (!porTrim[t]) porTrim[t] = { trim: t, base: 0, renta: 0, iva: 0, total: 0, pagado: 0 };
+      const f = FACTOR_IVA[tarifaDe(g)] || 0;
+      porTrim[t].base += g.monto;
+      porTrim[t].renta += g.monto * FACTOR_RENTA;
+      porTrim[t].iva += g.monto * f;
+      porTrim[t].total += imp;
+    });
+    gastos.filter((g)=>g.categoria === "Impuestos").forEach((g)=>{
+      const t = g.trimestre || trimestreDe(g.fecha);
+      if (!porTrim[t]) porTrim[t] = { trim: t, base: 0, renta: 0, iva: 0, total: 0, pagado: 0 };
+      porTrim[t].pagado += g.monto;
+    });
+    return Object.values(porTrim)
+      .map((x)=>({ ...x, falta: Math.max(0, x.total - x.pagado), vence: venceTrimestre(x.trim) }))
+      .sort((a,b)=>a.trim < b.trim ? -1 : 1);
+  }, [gastos]);
+
+  const impuesto = impuestos.reduce((a,x)=>a + x.falta, 0);
+  const trimActual = trimestreDe(hoyISO());
+  const impActual = impuestos.find((x)=>x.trim === trimActual);
+  const impVencidos = impuestos.filter((x)=>x.falta > 0 && x.vence < hoyISO());
   const comprometido = reponer + fijosMensuales + aportePend + colchon + impuesto + porPagar;
   const libre = totalNegocio - comprometido;
   /* Lo retirable es el menor entre la plata libre y la ganancia que todavía no se ha sacado.
@@ -2394,6 +2477,55 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
         </p>
       </Card>
 
+      {/* ---------- reserva de impuestos ---------- */}
+      {impuestos.length > 0 && (
+        <Card className="p-4">
+          <div className="flex items-baseline justify-between gap-3 mb-1">
+            <span className="f-head text-[11px]">Plata guardada para impuestos</span>
+            <span className="f-mono text-[13px] font-semibold">{C(impuesto)}</span>
+          </div>
+          <p className="text-[12px] text-[var(--muted)] mb-3 leading-relaxed">
+            Régimen simplificado: se paga sobre las compras, no sobre las ventas, y se declara cada trimestre.
+            La app lo va apartando desde el día que entra cada factura.
+          </p>
+
+          {impuestos.slice(-4).reverse().map((x)=>{
+            const esActual = x.trim === trimActual;
+            const vencido = x.falta > 0 && x.vence < hoyISO();
+            const sev = x.falta <= 0 ? "○" : vencido ? "●" : esActual ? "◐" : "◐";
+            return (
+              <div key={x.trim} className="py-2 border-b border-[var(--line)] last:border-0">
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="text-[13px]">
+                    <span className="text-[var(--muted)] mr-1.5">{sev}</span>
+                    {x.trim.replace("-T"," · trimestre ")}
+                    {esActual && <span className="text-[var(--muted)]"> (en curso)</span>}
+                  </span>
+                  <span className="f-mono text-[13px]">{x.falta > 0 ? C(x.falta) : "pagado"}</span>
+                </div>
+                <div className="text-[11px] text-[var(--muted)] f-mono mt-0.5">
+                  compras {C(x.base)} · renta {C(x.renta)} + IVA {C(x.iva)}
+                  {x.falta > 0 && ` · declara antes del ${fmtFecha(x.vence)}`}
+                </div>
+              </div>
+            );
+          })}
+
+          <p className="text-[12px] text-[var(--muted)] mt-3 leading-relaxed">
+            {impVencidos.length > 0
+              ? `● Hay ${impVencidos.length} trimestre${impVencidos.length===1?"":"s"} con la fecha de declaración pasada y ${C(impVencidos.reduce((a,x)=>a+x.falta,0))} sin pagar. Eso genera multas e intereses.`
+              : impActual
+                ? `El trimestre en curso lleva ${C(impActual.total)} devengados sobre ${C(impActual.base)} en compras. Se declara antes del ${fmtFecha(impActual.vence)}.`
+                : "Sin compras registradas en este trimestre todavía."}
+          </p>
+
+          <p className="text-[11px] text-[var(--muted)] mt-2 leading-relaxed border-t border-[var(--line)] pt-2">
+            Factores: renta 1% de toda compra, más IVA según la tarifa de la factura — 2% si vino al 13%, 0,33% al 2%, 0,125% al 1%.
+            Cuando pagués la declaración, anotala como salida con categoría <span className="font-medium">Impuestos</span> y se descuenta sola.
+          </p>
+        </Card>
+      )}
+
       {/* ---------- ¿se está reponiendo al ritmo que se vende? ---------- */}
       {costo30 > 0 && (
         <Card className="p-4">
@@ -2456,7 +2588,7 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
           <div className="pt-2 mt-1 border-t border-[var(--line)] space-y-1">
             <Linea label="Reponer lo vendido en 30 días" val={"− " + C(reponer)} />
             <Linea label="Gastos fijos del mes que entra" val={"− " + C(fijosMensuales)} />
-            {impuesto > 0 && <Linea label={`Impuesto sobre compras (${impPct}%)`} val={"− " + C(impuesto)} />}
+            {impuesto > 0 && <Linea label="Impuestos por pagar (sobre compras)" val={"− " + C(impuesto)} />}
             {porPagar > 0 && <Linea label={`Facturas de proveedor (${deudas.length})`} val={"− " + C(porPagar)} />}
             {aportePend > 0 && <Linea label="Devolver aportes de socios" val={"− " + C(aportePend)} />}
             <Linea label="Colchón de emergencia" val={"− " + C(colchon)} />
@@ -4212,9 +4344,11 @@ function AjustesModal({ cfg, guardar, onClose }) {
     <Modal title="Ajustes" onClose={onClose}>
       <div className="mb-3"><Lbl>Meta de ventas del mes</Lbl><Inp inputMode="decimal" value={f.meta} onChange={(e)=>setF({...f, meta:num(e.target.value)})} className="font-mono" /></div>
       <div className="mb-3">
-        <Lbl>Impuesto sobre las compras (%)</Lbl>
-        <Inp inputMode="decimal" value={f.impuestoCompras||0} onChange={(e)=>setF({...f, impuestoCompras:num(e.target.value)})} className="font-mono" />
-        <p className="text-[11px] text-stone-500 mt-1">Régimen simplificado: el impuesto se calcula sobre las compras, no sobre las ventas. Se aparta en el reparto de fin de mes. Preguntale el factor exacto a tu contador.</p>
+        <Lbl>Impuestos</Lbl>
+        <p className="text-[11px] text-stone-500 leading-relaxed">
+          Se calculan solos con los factores del régimen simplificado: renta 1% de cada compra, más IVA según la tarifa de la factura
+          (2% si vino al 13%, 0,33% al 2%, 0,125% al 1%). La tarifa se elige al registrar cada compra y la reserva se aparta sola.
+        </p>
       </div>
       <div className="mb-3">
         <Lbl>Margen para ventas sin costo conocido (%)</Lbl>
