@@ -542,7 +542,7 @@ function App() {
           {tab === "dinero" && <Dinero ventas={ventas} gastos={gastos} cierres={cierres} movs={movs} precios={precios} enlaces={enlaces} fijos={fijos} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={sesion.email} />}
           {tab === "analisis" && <Analisis ventas={ventas} gastos={gastos} precios={precios} enlaces={enlaces} cierres={cierres} cfg={cfg} />}
           {tab === "precios" && <Precios precios={precios} enlaces={enlaces} gastos={gastos} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={sesion.email} />}
-          {tab === "reportes" && <Reportes ventas={ventas} gastos={gastos} precios={precios} fijos={fijos} enlaces={enlaces} cierres={cierres} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} correo={sesion.email} />}
+          {tab === "reportes" && <Reportes ventas={ventas} gastos={gastos} precios={precios} fijos={fijos} enlaces={enlaces} cierres={cierres} movs={movs} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} correo={sesion.email} />}
           </Limite>
         </main>
       </div>
@@ -2507,6 +2507,51 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
         </p>
       </Card>
 
+      {deudas.length > 0 && (
+        <Card className="p-4">
+          <div className="flex items-baseline justify-between gap-3 mb-1">
+            <span className="f-head text-[11px]">Facturas por pagar</span>
+            <span className="f-mono text-[13px] font-semibold">{C(porPagar)}</span>
+          </div>
+          <p className="text-[12px] text-[var(--muted)] mb-3">
+            Mercadería que ya llegó pero todavía no se pagó. Esta plata está en el banco pero no es tuya.
+          </p>
+
+          {deudas.map((g)=>{
+            const d = g.dias;
+            const sev = d == null ? "◐" : d < 0 ? "●" : d <= 7 ? "●" : d <= 15 ? "◐" : "○";
+            return (
+              <div key={g.id} className="py-2 border-b border-[var(--line)] last:border-0 flex items-baseline justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[13px] truncate"><span className="text-[var(--muted)] mr-1.5">{sev}</span>{g.detalle || g.categoria}</div>
+                  <div className="text-[11px] text-[var(--muted)] f-mono">
+                    {g.vence ? `vence ${fmtFecha(g.vence)} · ` : "sin fecha · "}
+                    {d == null ? "" : d < 0 ? `${Math.abs(d)} días vencida` : d === 0 ? "vence hoy" : `en ${d} días`}
+                  </div>
+                </div>
+                <div className="text-right shrink-0">
+                  <div className="f-mono text-[13px]">{C(g.monto)}</div>
+                  <button onClick={()=>setPagando(g)} className="f-head text-[9px] text-[var(--signal)] min-h-[32px]">Marcar pagada</button>
+                </div>
+              </div>
+            );
+          })}
+
+          {(()=>{
+            const pronto = deudas.filter((g)=>g.dias != null && g.dias <= 7).reduce((a,g)=>a+g.monto,0);
+            const disponible = caja + pendienteReal + banco;
+            if (pronto <= 0) return null;
+            return (
+              <p className="text-[12px] leading-relaxed mt-3 pt-3 border-t border-[var(--line)]">
+                {pronto > disponible
+                  ? `● Vencen ${C(pronto)} en los próximos 7 días y solo hay ${C(disponible)} disponible. Falta plata: no compres más ni retirés nada hasta cubrirlo.`
+                  : `◐ Vencen ${C(pronto)} en los próximos 7 días. Queda cubierto con lo que hay, pero esa plata ya tiene dueño.`}
+              </p>
+            );
+          })()}
+        </Card>
+      )}
+
       {/* ---------- reserva de impuestos ---------- */}
       {impuestos.length > 0 && (
         <Card className="p-4">
@@ -3957,7 +4002,7 @@ function Analisis({ ventas, gastos, precios, enlaces, cierres, cfg }) {
 }
 
 /* ================= REPORTES ================= */
-function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, cfg, guardar, borrar, aviso, correo }) {
+function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, movs, cfg, guardar, borrar, aviso, correo }) {
   const [ajustes, setAjustes] = useState(false);
   const [verEnlaces, setVerEnlaces] = useState(false);
   const [detalle, setDetalle] = useState(false);
@@ -4042,6 +4087,28 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, cfg, guard
     const url = URL.createObjectURL(new Blob(["\ufeff"+csv], { type:"text/csv;charset=utf-8;" }));
     const a = document.createElement("a"); a.href = url; a.download = `patas-${hoyISO()}.csv`; a.click(); URL.revokeObjectURL(url);
     aviso("CSV descargado");
+  };
+
+  /* respaldo completo: todo lo que la app sabe, para analizar fuera o restaurar */
+  const exportarTodo = () => {
+    const datos = {
+      generado: new Date().toISOString(),
+      tienda: "Patas CR · San Blas",
+      config: cfg,
+      ventas, gastos, precios, fijos, enlaces, cierres,
+      movimientos: movs || [],
+      resumen: {
+        ventas: ventas.length, gastos: gastos.length, articulos: precios.length,
+        conLineas: ventas.filter((v)=>Array.isArray(v.items) && v.items.length).length,
+        desde: ventas.length ? ventas.map((v)=>v.fecha).sort()[0] : null,
+        hasta: ventas.length ? ventas.map((v)=>v.fecha).sort().slice(-1)[0] : null,
+      },
+    };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(datos, null, 1)], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = `patascr-completo-${hoyISO()}.json`; a.click();
+    URL.revokeObjectURL(url);
+    aviso("Respaldo completo descargado");
   };
 
   const nomMes = new Date(ay, am-1, 1).toLocaleDateString("es-CR", { month: "long", year: "numeric" });
@@ -4273,7 +4340,8 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, cfg, guard
       )}
 
       <div className="flex gap-2">
-        <Btn kind="ghost" className="flex-1" onClick={exportar}>Descargar CSV</Btn>
+        <Btn kind="ghost" className="flex-1" onClick={exportar}>CSV</Btn>
+        <Btn kind="ghost" className="flex-1" onClick={exportarTodo}>Respaldo completo</Btn>
         <Btn kind="ghost" className="flex-1" onClick={()=>setVerEnlaces(true)}>Enlaces</Btn>
         <Btn kind="ghost" className="flex-1" onClick={()=>setAjustes(true)}>Ajustes</Btn>
       </div>
