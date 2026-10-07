@@ -334,8 +334,17 @@ function costoDeVenta(p, monto) {
 }
 
 /* ================= UI base ================= */
-const Card = ({ children, className = "" }) => (
-  <div className={"bg-white border border-[var(--line-strong)] rounded-[10px] " + className}>{children}</div>
+/* Jerarquía: una tarjeta manda por pantalla y el resto retrocede.
+   Las tarjetas normales se separan del papel por superficie, no por borde fuerte.
+   nivel="principal" → la que el ojo debe ver primero
+   nivel="atencion"  → la que pide una acción (factura por vencer, descuadre) */
+const NIVEL = {
+  normal:    "border border-[var(--line)]",
+  principal: "border-2 border-[var(--ink)]",
+  atencion:  "border-2 border-[var(--attention)]",
+};
+const Card = ({ children, className = "", nivel = "normal" }) => (
+  <div className={"bg-white rounded-[10px] " + (NIVEL[nivel] || NIVEL.normal) + " " + className}>{children}</div>
 );
 
 const BTN = {
@@ -376,11 +385,11 @@ const Chip = ({ children, onClick, activo, className = "" }) => (
   <button onClick={onClick} className={"f-head tap-44 text-[11px] px-3.5 rounded-full border " + (activo ? "bg-[var(--ink)] text-[#F2F3F0] border-[var(--ink)] " : "bg-white text-[var(--ink)] border-[var(--line-strong)] active:bg-[rgba(22,33,28,.07)] ") + className}>{children}</button>
 );
 const Modal = ({ title, onClose, children }) => (
-  <div className="fixed inset-0 z-50 bg-stone-900/60 flex items-end sm:items-center justify-center" onClick={onClose}>
-    <div className="bg-white w-full sm:max-w-lg rounded-t-xl sm:rounded-xl max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-      <div className="sticky top-0 bg-white border-b border-stone-200 px-4 py-3 flex items-center justify-between">
+  <div className="fixed inset-0 z-50 bg-[rgba(14,22,20,.55)] flex items-end sm:items-center justify-center" onClick={onClose}>
+    <div className="bg-white w-full sm:max-w-lg rounded-t-[14px] sm:rounded-[12px] max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+      <div className="sticky top-0 bg-white border-b border-[var(--line)] px-4 py-3 flex items-center justify-between">
         <h3 className="font-semibold">{title}</h3>
-        <button onClick={onClose} className="text-stone-500 text-xl px-2">×</button>
+        <button onClick={onClose} className="text-[var(--muted)] text-xl px-2">×</button>
       </div>
       <div className="p-4">{children}</div>
     </div>
@@ -419,7 +428,7 @@ class Limite extends React.Component {
   render(){
     if (!this.state.err) return this.props.children;
     return (
-      <div className="border-2 border-[var(--ink)] rounded-lg p-4 bg-white">
+      <div className="border-2 border-[var(--ink)] rounded-[10px] p-4 bg-white">
         <div className="f-head text-[11px] mb-2">● Esta pantalla no se pudo mostrar</div>
         <p className="text-[13px] text-[var(--muted)] leading-relaxed mb-2">
           El resto de la app sigue funcionando y los datos están intactos. Cambiá de pestaña y volvé a entrar.
@@ -461,7 +470,7 @@ function App() {
   const guardar = async (col, obj) => { try { await window.FB.guardar(col, obj); } catch (e) { aviso("No se pudo guardar: " + e.code); } };
   const borrar = async (col, id) => { try { await window.FB.borrar(col, id); } catch (e) { aviso("No se pudo borrar"); } };
 
-  if (!fbListo || sesion === undefined) return <div className="min-h-screen flex items-center justify-center text-stone-500 text-sm">Conectando…</div>;
+  if (!fbListo || sesion === undefined) return <div className="min-h-screen flex items-center justify-center text-[var(--muted)] text-sm">Conectando…</div>;
   if (!sesion) return <Login aviso={aviso} toast={toast} />;
 
   const totalHoy = ventas.filter((v) => v.fecha === hoyISO()).reduce((a, v) => a + v.monto, 0);
@@ -472,31 +481,31 @@ function App() {
   const estado = errVentas ? "● sin acceso" : offline ? "◐ sin conexión" : "○ sincronizado";
 
   return (
-    <div className="min-h-screen text-stone-900 pb-24 lg:pb-0 lg:flex">
+    <div className="min-h-screen text-[var(--ink)] pb-24 lg:pb-0 lg:flex">
 
       {/* ---------- barra lateral, solo en pantalla grande ---------- */}
       <aside className="hidden lg:flex lg:flex-col lg:w-60 lg:shrink-0 bg-[var(--ink)] text-[#F2F3F0] lg:h-screen lg:sticky lg:top-0">
-        <div className="px-5 pt-6 pb-5 border-b border-stone-700">
-          <div className="text-[11px] uppercase tracking-[0.2em] text-stone-400">Patas CR</div>
-          <div className="text-[11px] text-stone-500">San Blas</div>
+        <div className="px-5 pt-6 pb-5 border-b border-[rgba(242,243,240,.16)]">
+          <div className="text-[11px] uppercase tracking-[0.2em] text-[rgba(242,243,240,.55)]">Patas CR</div>
+          <div className="text-[11px] text-[var(--muted)]">San Blas</div>
           <div className="mt-4 font-mono tabular-nums text-2xl tracking-tight">{C(totalHoy)}</div>
-          <div className="text-[11px] text-stone-400">hoy · {nHoy} {nHoy === 1 ? "venta" : "ventas"}</div>
-          {gastoHoy > 0 && <div className="font-mono tabular-nums text-[11px] text-stone-500 mt-0.5">{C(gastoHoy)} pagados</div>}
+          <div className="text-[11px] text-[rgba(242,243,240,.55)]">hoy · {nHoy} {nHoy === 1 ? "venta" : "ventas"}</div>
+          {gastoHoy > 0 && <div className="font-mono tabular-nums text-[11px] text-[var(--muted)] mt-0.5">{C(gastoHoy)} pagados</div>}
         </div>
         <nav className="flex-1 py-3">
           {TABS.map(([id,l]) => (
             <button
               key={id}
               onClick={() => setTab(id)}
-              className={"w-full text-left px-5 py-2.5 text-sm border-l-2 " + (tab === id ? "border-[#F2F3F0] bg-[rgba(242,243,240,.12)] text-white font-medium" : "border-transparent text-stone-400 hover:text-stone-200")}
+              className={"w-full text-left px-5 py-2.5 text-sm border-l-2 " + (tab === id ? "border-[#F2F3F0] bg-[rgba(242,243,240,.12)] text-white font-medium" : "border-transparent text-[rgba(242,243,240,.55)] hover:text-[rgba(242,243,240,.9)]")}
             >
               {l}
             </button>
           ))}
         </nav>
-        <div className="px-5 py-4 border-t border-stone-700">
-          <div className="font-mono text-[11px] text-stone-400">{estado}</div>
-          <div className="text-[11px] text-stone-500 truncate mt-1">{sesion.email}</div>
+        <div className="px-5 py-4 border-t border-[rgba(242,243,240,.16)]">
+          <div className="font-mono text-[11px] text-[rgba(242,243,240,.55)]">{estado}</div>
+          <div className="text-[11px] text-[var(--muted)] truncate mt-1">{sesion.email}</div>
         </div>
       </aside>
 
@@ -516,22 +525,22 @@ function App() {
           {gastoHoy > 0 && <div className="mt-0.5 text-[12px] text-[var(--muted)]"><span className="f-mono">− {C(gastoHoy)}</span> en compras y gastos</div>}
         </header>
 
-        <main className="px-3 pt-3 lg:px-8 lg:pt-7 lg:pb-10 max-w-3xl lg:max-w-6xl mx-auto">
+        <main className="px-3 pt-3 pb-[calc(var(--nav-h)+28px)] lg:px-8 lg:pt-7 lg:pb-10 max-w-3xl lg:max-w-6xl mx-auto">
           <div className="hidden lg:block mb-5">
             <h1 className="text-xl font-semibold">{TABS.find((t)=>t[0]===tab)[1]}</h1>
           </div>
 
           {offline && !errVentas && <AvisoOffline />}
           {errVentas && (
-            <div className="border-2 border-stone-900 rounded-lg p-3 mb-3 bg-white">
+            <div className="border-2 border-[var(--ink)] rounded-[10px] p-3 mb-3 bg-white">
               <div className="text-sm font-medium mb-1">● No se está leyendo la base de datos</div>
-              <p className="text-[12px] text-stone-700 leading-relaxed mb-2">
+              <p className="text-[12px] text-[var(--ink)] leading-relaxed mb-2">
                 Código del error: <span className="font-mono">{errVentas}</span>
                 <br />
                 Sesión iniciada con: <span className="font-mono">{sesion.email}</span>
               </p>
               {errVentas === "permission-denied" && (
-                <p className="text-[12px] text-stone-700 leading-relaxed">
+                <p className="text-[12px] text-[var(--ink)] leading-relaxed">
                   Ese correo no está en las reglas de Firestore. Entrá a Firebase → Firestore Database → Reglas y verificá que{" "}
                   <span className="font-mono">{sesion.email}</span> aparezca escrito exactamente igual, entre comillas simples. Después tocá Publicar.
                 </p>
@@ -549,7 +558,7 @@ function App() {
         </main>
       </div>
 
-      {toast && <div className="fixed bottom-[calc(var(--nav-h)+84px)] lg:bottom-8 left-1/2 -translate-x-1/2 bg-[var(--ink)] text-[#F2F3F0] text-sm px-4 py-2 rounded-full z-50 shadow-lg">{toast}</div>}
+      {toast && <div className="fixed bottom-[calc(var(--nav-h)+84px)] lg:bottom-8 left-1/2 -translate-x-1/2 bg-[var(--ink)] text-[#F2F3F0] text-sm px-4 py-2 rounded-full z-50 border border-[rgba(242,243,240,.22)]">{toast}</div>}
 
       <nav className="lg:hidden fixed bottom-0 inset-x-0 bg-white border-t border-[var(--line-strong)] grid grid-cols-6 z-40 pb-[env(safe-area-inset-bottom)]">
         {TABS.map(([id,l]) => (
@@ -581,9 +590,9 @@ function AvisoOffline() {
   };
 
   return (
-    <div className="border-2 border-stone-900 rounded-lg p-3 mb-3 bg-white">
+    <div className="border-2 border-[var(--ink)] rounded-[10px] p-3 mb-3 bg-white">
       <div className="text-sm font-medium mb-1">● Lleva rato sin poder conectarse</div>
-      <p className="text-[12px] text-stone-700 leading-relaxed">
+      <p className="text-[12px] text-[var(--ink)] leading-relaxed">
         Lo que registrés queda guardado solo en este dispositivo hasta que vuelva la conexión, y en los otros teléfonos no aparece.
         <br /><br />
         Proyecto configurado: <span className="font-mono">{window.FB.proyecto}</span>
@@ -597,12 +606,12 @@ function AvisoOffline() {
         </Btn>
       </div>
       {res && (
-        <div className="mt-3 border-t border-stone-200 pt-2">
+        <div className="mt-3 border-t border-[var(--line)] pt-2">
           <div className="font-mono text-[12px] mb-1">Código: {res.status === 0 ? "sin respuesta" : res.status}</div>
-          <p className="text-[12px] text-stone-700 leading-relaxed mb-2">{lectura(res.status)}</p>
+          <p className="text-[12px] text-[var(--ink)] leading-relaxed mb-2">{lectura(res.status)}</p>
           <details>
-            <summary className="text-[11px] text-stone-500 cursor-pointer">Ver detalle técnico</summary>
-            <pre className="text-[10px] whitespace-pre-wrap mt-1 text-stone-600">{res.cuerpo}</pre>
+            <summary className="text-[11px] text-[var(--muted)] cursor-pointer">Ver detalle técnico</summary>
+            <pre className="text-[10px] whitespace-pre-wrap mt-1 text-[var(--muted)]">{res.cuerpo}</pre>
           </details>
         </div>
       )}
@@ -626,15 +635,15 @@ function Login({ aviso, toast }) {
   };
 
   return (
-    <div className="min-h-screen flex flex-col justify-center px-6 bg-stone-900">
+    <div className="min-h-screen flex flex-col justify-center px-6 bg-[var(--readout)]">
       <div className="max-w-sm w-full mx-auto">
-        <div className="text-[11px] uppercase tracking-[0.2em] text-stone-400 mb-1">Patas CR</div>
-        <div className="text-2xl text-stone-100 mb-6">Control de tienda</div>
+        <div className="text-[11px] uppercase tracking-[0.2em] text-[rgba(242,243,240,.55)] mb-1">Patas CR</div>
+        <div className="text-2xl text-[#F2F3F0] mb-6">Control de tienda</div>
         <Inp type="email" inputMode="email" autoComplete="username" placeholder="Correo" value={correo} onChange={(e) => setCorreo(e.target.value)} className="mb-2" />
         <Inp type="password" autoComplete="current-password" placeholder="Contraseña" value={clave} onChange={(e) => setClave(e.target.value)} className="mb-4" />
         <Btn kind="warn" className="w-full py-3" disabled={cargando || !correo || !clave} onClick={entrar}>{cargando ? "Entrando…" : "Entrar"}</Btn>
       </div>
-      {toast && <div className="fixed bottom-10 left-1/2 -translate-x-1/2 bg-white text-stone-900 text-sm px-4 py-2 rounded-full">{toast}</div>}
+      {toast && <div className="fixed bottom-10 left-1/2 -translate-x-1/2 bg-white text-[var(--ink)] text-sm px-4 py-2 rounded-full">{toast}</div>}
     </div>
   );
 }
@@ -646,7 +655,7 @@ function Registrar({ ventas, gastos, fijos, precios, enlaces, cierres, cfg, guar
     <div>
       <div className="grid grid-cols-2 gap-1.5 mb-3">
         {[["venta","Entra plata"],["gasto","Sale plata"]].map(([id,l]) => (
-          <button key={id} onClick={() => setModo(id)} className={"py-2.5 rounded-md border text-sm font-medium " + (modo === id ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300 text-stone-600")}>{l}</button>
+          <button key={id} onClick={() => setModo(id)} className={"py-2.5 rounded-[8px] border text-sm font-medium " + (modo === id ? "bg-[var(--ink)] text-white border-[var(--ink)]" : "bg-white border-[var(--line-strong)] text-[var(--muted)]")}>{l}</button>
         ))}
       </div>
       <div className="lg:max-w-2xl">
@@ -1259,20 +1268,20 @@ function ImportarVentasModal({ onClose, onSave }) {
 
   return (
     <Modal title="Pegar ventas desde el Sheets" onClose={onClose}>
-      <p className="text-[13px] text-stone-600 mb-2 leading-relaxed">Orden esperado: fecha, producto, monto, cliente, pago.</p>
-      <textarea value={txt} onChange={(e)=>setTxt(e.target.value)} rows={7} placeholder={"22/7/2026\tNutri salmon perro\t₡4,300\t\ttarjeta"} className="w-full px-3 py-2 border border-stone-300 rounded-md bg-stone-50 font-mono text-[12px]" />
+      <p className="text-[13px] text-[var(--muted)] mb-2 leading-relaxed">Orden esperado: fecha, producto, monto, cliente, pago.</p>
+      <textarea value={txt} onChange={(e)=>setTxt(e.target.value)} rows={7} placeholder={"22/7/2026\tNutri salmon perro\t₡4,300\t\ttarjeta"} className="w-full px-3 py-2 border border-[var(--line-strong)] rounded-[8px] bg-[var(--surface)] font-mono text-[12px]" />
       <div className="my-3 text-sm">
-        {txt.trim() === "" ? <span className="text-stone-500">Esperando las filas.</span> : (
+        {txt.trim() === "" ? <span className="text-[var(--muted)]">Esperando las filas.</span> : (
           <><Linea label="Filas reconocidas" val={String(filas.length)} fuerte /><Linea label="Suma" val={C(filas.reduce((a,f)=>a+f.monto,0))} /></>
         )}
       </div>
       {prog && (
         <div className="mb-3">
-          <div className="h-2 bg-stone-200 rounded-full overflow-hidden"><div className="h-full bg-stone-900" style={{ width: (prog.hecho/prog.total*100)+"%" }} /></div>
+          <div className="h-2 bg-[rgba(22,33,28,.10)] rounded-full overflow-hidden"><div className="h-full bg-[var(--ink)]" style={{ width: (prog.hecho/prog.total*100)+"%" }} /></div>
           <div className="font-mono text-[12px] mt-1">Subiendo {prog.hecho} de {prog.total}…</div>
         </div>
       )}
-      {err && <p className="text-[12px] text-stone-800 border border-stone-400 rounded-md p-2 mb-3">● Se cortó la subida: <span className="font-mono">{err}</span></p>}
+      {err && <p className="text-[12px] text-[var(--ink)] border border-[var(--line-strong)] rounded-[8px] p-2 mb-3">● Se cortó la subida: <span className="font-mono">{err}</span></p>}
       <Btn kind="warn" className="w-full py-3" disabled={!filas.length || prog} onClick={subir}>Importar {filas.length || ""}</Btn>
     </Modal>
   );
@@ -1318,12 +1327,12 @@ function CierreModal({ fecha, ventas, gastos, cierres, cfg, guardar, usuario, av
 
   return (
     <Modal title={"Cerrar caja · " + fmtFecha(fecha)} onClose={onClose}>
-      <div className="bg-stone-100 rounded-md p-3 mb-3 space-y-1">
+      <div className="bg-[var(--surface)] rounded-[8px] p-3 mb-3 space-y-1">
         <Linea label="Fondo en billetes" val={C(fondo)} />
         {monedasPrev > 0 && <Linea label="Monedas del cierre anterior" val={"+ " + C(monedasPrev)} />}
         <Linea label={desde ? `Ventas en efectivo desde el ${fmtFecha(desde)}` : "Ventas en efectivo"} val={"+ " + C(efeVentas)} />
         <Linea label="Pagos en efectivo" val={"− " + C(efeGastos)} />
-        <div className="pt-2 mt-1 border-t border-stone-300">
+        <div className="pt-2 mt-1 border-t border-[var(--line-strong)]">
           <Linea label="Debería haber en total" val={C(esperado)} fuerte />
         </div>
       </div>
@@ -1331,13 +1340,13 @@ function CierreModal({ fecha, ventas, gastos, cierres, cfg, guardar, usuario, av
       <div className="mb-3">
         <Lbl>Billetes contados</Lbl>
         <Inp inputMode="decimal" value={billetes} onChange={(e)=>setBilletes(e.target.value)} placeholder="0" className="font-mono tabular-nums text-2xl" />
-        <p className="text-[11px] text-stone-500 mt-1">Solo los billetes. Es lo que se puede depositar en el cajero.</p>
+        <p className="text-[11px] text-[var(--muted)] mt-1">Solo los billetes. Es lo que se puede depositar en el cajero.</p>
       </div>
 
       <div className="mb-3">
         <Lbl>Monedas y menudo</Lbl>
         <Inp inputMode="decimal" value={monedas} onChange={(e)=>setMonedas(e.target.value)} placeholder="0" className="font-mono tabular-nums text-lg" />
-        <p className="text-[11px] text-stone-500 mt-1">
+        <p className="text-[11px] text-[var(--muted)] mt-1">
           {monedasPrev > 0
             ? `Viene puesto lo del cierre anterior (${C(monedasPrev)}). Si no las contaste, dejalo así: la diferencia de abajo va a reflejar solo los billetes.`
             : "Si no las contás, poné un aproximado. Queda en la caja, no se deposita."}
@@ -1345,25 +1354,25 @@ function CierreModal({ fecha, ventas, gastos, cierres, cfg, guardar, usuario, av
       </div>
 
       {retiro !== null && retiro > 0 && (
-        <div className="bg-stone-100 rounded-md p-3 mb-3">
+        <div className="bg-[var(--surface)] rounded-[8px] p-3 mb-3">
           <Linea label={`Llevá al banco y dejá ${C(fondo)} en billetes`} val={C(retiro)} fuerte />
-          <p className="text-[11px] text-stone-500 mt-1">Las {C(mon)} en monedas se quedan en la caja. Queda en "por depositar" hasta que lo registrés en Dinero.</p>
+          <p className="text-[11px] text-[var(--muted)] mt-1">Las {C(mon)} en monedas se quedan en la caja. Queda en "por depositar" hasta que lo registrés en Dinero.</p>
         </div>
       )}
       {retiro !== null && retiro < 0 && (
-        <p className="text-[12px] text-stone-700 border border-stone-400 rounded-md p-2 mb-3">
+        <p className="text-[12px] text-[var(--ink)] border border-[var(--line-strong)] rounded-[8px] p-2 mb-3">
           ● Hay menos de {C(fondo)} en billetes. Faltan {C(Math.abs(retiro))} para completar el fondo antes de abrir mañana.
         </p>
       )}
 
       {dif !== null && (
-        <div className="border border-stone-400 rounded-md p-3 mb-3">
+        <div className="border border-[var(--line-strong)] rounded-[8px] p-3 mb-3">
           <div className="flex justify-between items-baseline">
             <span className="text-sm font-medium">{Math.abs(dif) < 0.005 ? "○ Cuadra exacto" : dif > 0 ? "◐ Sobra" : "● Falta"}</span>
             <span className="font-mono tabular-nums text-xl font-semibold">{C(Math.abs(dif))}</span>
           </div>
           {Math.abs(dif) >= 0.005 && (
-            <p className="text-[12px] text-stone-600 mt-2 leading-relaxed">
+            <p className="text-[12px] text-[var(--muted)] mt-2 leading-relaxed">
               {Math.abs(dif) <= 1000
                 ? "Una diferencia chica casi siempre son monedas que no se contaron. Anotala igual: lo que importa es si se repite."
                 : "Diferencia grande para ser solo menudo. Revisá si quedó alguna venta sin registrar o un pago sin anotar."}
@@ -1377,22 +1386,22 @@ function CierreModal({ fecha, ventas, gastos, cierres, cfg, guardar, usuario, av
         <Inp value={nota} onChange={(e)=>setNota(e.target.value)} placeholder="Se pagó un mandado, faltó vuelto…" />
       </div>
 
-      {yaCerrado && <p className="text-[12px] text-stone-600 mb-3">◐ Esta fecha ya tiene un cierre guardado. Si guardás, lo reemplaza.</p>}
+      {yaCerrado && <p className="text-[12px] text-[var(--muted)] mb-3">◐ Esta fecha ya tiene un cierre guardado. Si guardás, lo reemplaza.</p>}
 
       <Btn kind="warn" className="w-full py-3" disabled={billetes===""} onClick={guardarCierre}>Guardar cierre</Btn>
 
       {previos.length>0 && (
-        <div className="mt-4 pt-3 border-t border-stone-200">
-          <div className="text-[11px] uppercase tracking-wide text-stone-500 mb-2">Últimos cierres</div>
+        <div className="mt-4 pt-3 border-t border-[var(--line)]">
+          <div className="text-[11px] uppercase tracking-wide text-[var(--muted)] mb-2">Últimos cierres</div>
           {previos.map((c)=>(
             <div key={c.id} className="flex justify-between py-1 text-[13px]">
-              <span className="font-mono text-stone-600">{fmtFecha(c.fecha)}</span>
+              <span className="font-mono text-[var(--muted)]">{fmtFecha(c.fecha)}</span>
               <span className="font-mono tabular-nums">
                 {Math.abs(c.diferencia||0) < 0.005 ? "○ cuadró" : ((c.diferencia > 0 ? "◐ sobró " : "● faltó ") + C(Math.abs(c.diferencia)))}
               </span>
             </div>
           ))}
-          <div className="flex justify-between pt-2 mt-1 border-t border-stone-200 text-[13px] font-medium">
+          <div className="flex justify-between pt-2 mt-1 border-t border-[var(--line)] text-[13px] font-medium">
             <span>Acumulado histórico</span>
             <span className="font-mono tabular-nums">{Math.abs(acumulado) < 0.005 ? "cuadrado" : (acumulado > 0 ? "sobra " : "falta ") + C(Math.abs(acumulado))}</span>
           </div>
@@ -1444,7 +1453,7 @@ function GastoForm({ gastos, fijos, precios, enlaces, cfg, guardar, borrar, avis
         <Lbl>En qué</Lbl>
         <div className="flex flex-wrap gap-1.5 mb-3">
           {CATS.map((c)=>(
-            <button key={c} onClick={()=>setCat(c)} className={"px-2.5 py-1.5 rounded-full border text-[12px] " + (cat===c ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{c}</button>
+            <button key={c} onClick={()=>setCat(c)} className={"px-2.5 py-1.5 rounded-full border text-[12px] " + (cat===c ? "bg-[var(--ink)] text-white border-[var(--ink)]" : "bg-white border-[var(--line-strong)]")}>{c}</button>
           ))}
         </div>
         {(cat === "Mercadería" || cat === "Empaque") && (
@@ -1496,7 +1505,7 @@ function GastoForm({ gastos, fijos, precios, enlaces, cfg, guardar, borrar, avis
             <Lbl>Cómo se pagó</Lbl>
             <div className="grid grid-cols-4 gap-1.5 mb-4">
               {PAGOS.map((p)=>(
-                <button key={p} onClick={()=>setPago(p)} className={"py-2 rounded-md border text-[12px] " + (pago===p ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{p}</button>
+                <button key={p} onClick={()=>setPago(p)} className={"py-2 rounded-[8px] border text-[12px] " + (pago===p ? "bg-[var(--ink)] text-white border-[var(--ink)]" : "bg-white border-[var(--line-strong)]")}>{p}</button>
               ))}
             </div>
           </React.Fragment>
@@ -1509,24 +1518,24 @@ function GastoForm({ gastos, fijos, precios, enlaces, cfg, guardar, borrar, avis
       </Card>
 
       <div className="flex justify-between items-baseline px-1 mb-2">
-        <span className="text-[11px] uppercase tracking-wide text-stone-500">{fecha === hoyISO() ? "Salidas de hoy" : "Salidas del " + fmtFecha(fecha)}</span>
-        <button onClick={()=>setVerFijos(true)} className="text-[11px] text-stone-500 underline">Gastos fijos del mes</button>
+        <span className="text-[11px] uppercase tracking-wide text-[var(--muted)]">{fecha === hoyISO() ? "Salidas de hoy" : "Salidas del " + fmtFecha(fecha)}</span>
+        <button onClick={()=>setVerFijos(true)} className="text-[11px] text-[var(--muted)] underline">Gastos fijos del mes</button>
       </div>
 
-      {delDia.length === 0 ? <p className="text-sm text-stone-500 text-center py-6">Sin salidas en esta fecha.</p> : (
-        <Card className="divide-y divide-stone-100">
+      {delDia.length === 0 ? <p className="text-sm text-[var(--muted)] text-center py-6">Sin salidas en esta fecha.</p> : (
+        <Card className="divide-y divide-[var(--line)]">
           {delDia.map((g)=>(
             <div key={g.id} className="px-3 py-2 flex justify-between items-center">
               <div className="min-w-0">
                 <div className="text-sm truncate">{g.detalle || g.categoria}</div>
-                <div className="text-[11px] text-stone-500">
+                <div className="text-[11px] text-[var(--muted)]">
                   {g.categoria} · {g.credito && !g.pagado ? `◐ a crédito, vence ${g.vence ? fmtFecha(g.vence) : "sin fecha"}` : g.pago}
                 </div>
               </div>
               <span className="font-mono tabular-nums text-sm font-medium ml-2">− {C(g.monto)}</span>
             </div>
           ))}
-          <div className="px-3 py-2 flex justify-between bg-stone-50">
+          <div className="px-3 py-2 flex justify-between bg-[var(--surface)]">
             <span className="text-sm font-medium">Total salidas</span>
             <span className="font-mono tabular-nums font-semibold">{C(delDia.reduce((a,g)=>a+g.monto,0))}</span>
           </div>
@@ -1559,29 +1568,29 @@ function FijosModal({ fijos, gastos, guardar, borrar, onClose, aviso }) {
 
   return (
     <Modal title="Gastos fijos del mes" onClose={onClose}>
-      <p className="text-[13px] text-stone-600 mb-3 leading-relaxed">Lo que se paga todos los meses pase lo que pase. Se guardan una vez y con un toque quedan registrados.</p>
+      <p className="text-[13px] text-[var(--muted)] mb-3 leading-relaxed">Lo que se paga todos los meses pase lo que pase. Se guardan una vez y con un toque quedan registrados.</p>
       {fijos.length > 0 && (
-        <Card className="divide-y divide-stone-100 mb-3">
+        <Card className="divide-y divide-[var(--line)] mb-3">
           {fijos.map((f)=>(
             <div key={f.id} className="px-3 py-2 flex justify-between items-center">
               <div>
-                <div className="text-sm"><span className="text-stone-500 mr-1.5">{yaCargado(f) ? "○" : "◐"}</span>{f.nombre}</div>
-                <div className="text-[11px] text-stone-500">{f.categoria} · día {f.dia} · {yaCargado(f) ? "ya cargado" : "pendiente"}</div>
+                <div className="text-sm"><span className="text-[var(--muted)] mr-1.5">{yaCargado(f) ? "○" : "◐"}</span>{f.nombre}</div>
+                <div className="text-[11px] text-[var(--muted)]">{f.categoria} · día {f.dia} · {yaCargado(f) ? "ya cargado" : "pendiente"}</div>
               </div>
               <div className="flex items-center gap-3">
                 <span className="font-mono tabular-nums text-sm">{C(f.monto)}</span>
-                <button onClick={()=>borrar("fijos", f.id)} className="text-stone-400 text-lg">×</button>
+                <button onClick={()=>borrar("fijos", f.id)} className="text-[var(--muted)] text-lg">×</button>
               </div>
             </div>
           ))}
-          <div className="px-3 py-2 flex justify-between bg-stone-50">
+          <div className="px-3 py-2 flex justify-between bg-[var(--surface)]">
             <span className="text-sm font-medium">Total fijo mensual</span>
             <span className="font-mono tabular-nums font-semibold">{C(totalFijos)}</span>
           </div>
         </Card>
       )}
       {pendientes.length > 0 && <Btn kind="warn" className="w-full py-3 mb-4" onClick={cargarMes}>Cargar {pendientes.length} pendientes de {mesAct}</Btn>}
-      <div className="border-t border-stone-200 pt-3">
+      <div className="border-t border-[var(--line)] pt-3">
         <Lbl>Agregar un gasto fijo</Lbl>
         <Inp value={nombre} onChange={(e)=>setNombre(e.target.value)} placeholder="Alquiler del local" className="mb-2" />
         <div className="grid grid-cols-2 gap-2 mb-2">
@@ -1589,14 +1598,14 @@ function FijosModal({ fijos, gastos, guardar, borrar, onClose, aviso }) {
           <Inp inputMode="numeric" value={dia} onChange={(e)=>setDia(e.target.value)} placeholder="Día" className="font-mono" />
         </div>
         <div className="flex flex-wrap gap-1.5 mb-3">
-          {CATS.map((c)=>(<button key={c} onClick={()=>setCat(c)} className={"px-2.5 py-1.5 rounded-full border text-[12px] " + (cat===c ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{c}</button>))}
+          {CATS.map((c)=>(<button key={c} onClick={()=>setCat(c)} className={"px-2.5 py-1.5 rounded-full border text-[12px] " + (cat===c ? "bg-[var(--ink)] text-white border-[var(--ink)]" : "bg-white border-[var(--line-strong)]")}>{c}</button>))}
         </div>
         <Btn className="w-full" disabled={!nombre.trim() || !monto} onClick={async ()=>{
           await guardar("fijos", { id: UID(), nombre: nombre.trim(), monto: num(monto), categoria: cat, dia: parseInt(dia)||1 });
           setNombre(""); setMonto("");
         }}>Agregar a la lista</Btn>
       </div>
-      <p className="text-[11px] text-stone-500 mt-3">○ ya cargado este mes · ◐ pendiente</p>
+      <p className="text-[11px] text-[var(--muted)] mt-3">○ ya cargado este mes · ◐ pendiente</p>
     </Modal>
   );
 }
@@ -1622,10 +1631,10 @@ function Historial({ ventas, gastos, guardar, borrar, aviso }) {
       <Inp placeholder="Buscar producto, cliente o proveedor…" value={q} onChange={(e)=>setQ(e.target.value)} className="mb-2" />
       <div className="flex gap-2 mb-3">
         {[["todo","Todo"],["venta","Ventas"],["gasto","Salidas"]].map(([id,l])=>(
-          <button key={id} onClick={()=>setTipo(id)} className={"px-3 py-1.5 rounded-full border text-xs " + (tipo===id ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{l}</button>
+          <button key={id} onClick={()=>setTipo(id)} className={"px-3 py-1.5 rounded-full border text-xs " + (tipo===id ? "bg-[var(--ink)] text-white border-[var(--ink)]" : "bg-white border-[var(--line-strong)]")}>{l}</button>
         ))}
       </div>
-      {grupos.length === 0 && <p className="text-sm text-stone-500 text-center py-8">Nada que mostrar.</p>}
+      {grupos.length === 0 && <p className="text-sm text-[var(--muted)] text-center py-8">Nada que mostrar.</p>}
       <div className="space-y-3 lg:space-y-0 lg:grid lg:grid-cols-2 lg:gap-3 lg:items-start">
         {grupos.slice(0,40).map(([fecha, lista])=>{
           const ent = lista.filter((x)=>x._t==="venta").reduce((a,x)=>a+x.monto,0);
@@ -1633,15 +1642,15 @@ function Historial({ ventas, gastos, guardar, borrar, aviso }) {
           return (
             <div key={fecha}>
               <div className="flex justify-between items-baseline px-1 mb-1">
-                <span className="text-[11px] uppercase tracking-wide text-stone-500">{titulo(nombreDia(fecha))} {fmtFecha(fecha)}</span>
-                <span className="font-mono tabular-nums text-[12px] font-medium">{C(ent)}{sal>0 && <span className="text-stone-500"> − {C(sal)} = {C(ent-sal)}</span>}</span>
+                <span className="text-[11px] uppercase tracking-wide text-[var(--muted)]">{titulo(nombreDia(fecha))} {fmtFecha(fecha)}</span>
+                <span className="font-mono tabular-nums text-[12px] font-medium">{C(ent)}{sal>0 && <span className="text-[var(--muted)]"> − {C(sal)} = {C(ent-sal)}</span>}</span>
               </div>
-              <Card className="divide-y divide-stone-100">
+              <Card className="divide-y divide-[var(--line)]">
                 {lista.map((x)=>(
-                  <button key={x.id} onClick={()=>x._t==="venta" ? setEdit(x) : setEditG(x)} className="w-full text-left px-3 py-2 flex justify-between items-center active:bg-stone-50">
+                  <button key={x.id} onClick={()=>x._t==="venta" ? setEdit(x) : setEditG(x)} className="w-full text-left px-3 py-2 flex justify-between items-center active:bg-[rgba(22,33,28,.05)]">
                     <div className="min-w-0">
                       <div className="text-sm truncate">{x._t==="venta" ? x.producto : (x.detalle || x.categoria)}</div>
-                      <div className="text-[11px] text-stone-500">{x._t==="venta" ? [x.cliente,x.pago].filter(Boolean).join(" · ") : `Salida · ${x.categoria} · ${x.pago}`}</div>
+                      <div className="text-[11px] text-[var(--muted)]">{x._t==="venta" ? [x.cliente,x.pago].filter(Boolean).join(" · ") : `Salida · ${x.categoria} · ${x.pago}`}</div>
                     </div>
                     <span className="font-mono tabular-nums text-sm ml-2">{x._t==="venta" ? C(x.monto) : "− " + C(x.monto)}</span>
                   </button>
@@ -1675,7 +1684,7 @@ function EditarVentaModal({ v, onClose, onSave, onDelete }) {
       <div className="mb-3"><Lbl>Cliente</Lbl><Inp value={f.cliente || ""} onChange={(e)=>setF({...f, cliente:e.target.value})} /></div>
       <Lbl>Pago</Lbl>
       <div className="grid grid-cols-4 gap-1.5 mb-4">
-        {PAGOS.map((p)=>(<button key={p} onClick={()=>setF({...f, pago:p})} className={"py-2 rounded-md border text-[12px] " + (f.pago===p ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{p}</button>))}
+        {PAGOS.map((p)=>(<button key={p} onClick={()=>setF({...f, pago:p})} className={"py-2 rounded-[8px] border text-[12px] " + (f.pago===p ? "bg-[var(--ink)] text-white border-[var(--ink)]" : "bg-white border-[var(--line-strong)]")}>{p}</button>))}
       </div>
       <div className="flex gap-2">
         <Btn kind="warn" className="flex-1 py-3" onClick={()=>onSave({ ...f, monto: num(f.monto) })}>Guardar</Btn>
@@ -1695,12 +1704,12 @@ function EditarGastoModal({ g, onClose, onSave, onDelete }) {
       </div>
       <Lbl>En qué</Lbl>
       <div className="flex flex-wrap gap-1.5 mb-3">
-        {CATS.map((c)=>(<button key={c} onClick={()=>setF({...f, categoria:c})} className={"px-2.5 py-1.5 rounded-full border text-[12px] " + (f.categoria===c ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{c}</button>))}
+        {CATS.map((c)=>(<button key={c} onClick={()=>setF({...f, categoria:c})} className={"px-2.5 py-1.5 rounded-full border text-[12px] " + (f.categoria===c ? "bg-[var(--ink)] text-white border-[var(--ink)]" : "bg-white border-[var(--line-strong)]")}>{c}</button>))}
       </div>
       <div className="mb-3"><Lbl>Proveedor o detalle</Lbl><Inp value={f.detalle || ""} onChange={(e)=>setF({...f, detalle:e.target.value})} /></div>
       <Lbl>Cómo se pagó</Lbl>
       <div className="grid grid-cols-4 gap-1.5 mb-4">
-        {PAGOS.map((p)=>(<button key={p} onClick={()=>setF({...f, pago:p})} className={"py-2 rounded-md border text-[12px] " + (f.pago===p ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{p}</button>))}
+        {PAGOS.map((p)=>(<button key={p} onClick={()=>setF({...f, pago:p})} className={"py-2 rounded-[8px] border text-[12px] " + (f.pago===p ? "bg-[var(--ink)] text-white border-[var(--ink)]" : "bg-white border-[var(--line-strong)]")}>{p}</button>))}
       </div>
       <div className="flex gap-2">
         <Btn kind="warn" className="flex-1 py-3" onClick={()=>onSave({ ...f, monto: num(f.monto) })}>Guardar</Btn>
@@ -1829,7 +1838,7 @@ function Waterfall({ pasos }) {
 function GraficoLinea({ series, etiquetas, yMax }) {
   const W = 760, H = 240, padL = 62, padR = 14, padT = 16, padB = 34;
   const n = Math.max(...series.map((s)=>s.puntos.length));
-  if (n < 2) return <p className="text-sm text-stone-500 py-6 text-center">Hacen falta al menos dos días con venta.</p>;
+  if (n < 2) return <p className="text-sm text-[var(--muted)] py-6 text-center">Hacen falta al menos dos días con venta.</p>;
   const max = yMax || Math.max(...series.flatMap((s)=>s.puntos), 1);
   const x = (i) => padL + (W-padL-padR) * (i/(n-1));
   const y = (v) => padT + (H-padT-padB) * (1 - v/max);
@@ -1875,7 +1884,7 @@ function GraficoLinea({ series, etiquetas, yMax }) {
 /* ---------- dispersión: cuánto se vende vs cuánto deja ---------- */
 function GraficoDispersion({ puntos, metaPct }) {
   const W = 760, H = 300, padL = 58, padR = 20, padT = 20, padB = 46;
-  if (!puntos.length) return <p className="text-sm text-stone-500 py-6 text-center">Hacen falta productos enlazados a la tabla de precios.</p>;
+  if (!puntos.length) return <p className="text-sm text-[var(--muted)] py-6 text-center">Hacen falta productos enlazados a la tabla de precios.</p>;
   const maxX = Math.max(...puntos.map((p)=>p.venta), 1) * 1.12;
   const maxY = Math.max(...puntos.map((p)=>p.pct), metaPct, 1) * 1.15;
   const minY = Math.min(0, ...puntos.map((p)=>p.pct));
@@ -1915,7 +1924,7 @@ function GraficoDispersion({ puntos, metaPct }) {
 /* ---------- histograma de tiquetes ---------- */
 function Histograma({ valores, cortes }) {
   const W = 760, H = 220, padL = 40, padR = 14, padT = 16, padB = 46;
-  if (!valores.length) return <p className="text-sm text-stone-500 py-6 text-center">Sin ventas en el período.</p>;
+  if (!valores.length) return <p className="text-sm text-[var(--muted)] py-6 text-center">Sin ventas en el período.</p>;
   const cubos = cortes.map((c,i)=>({
     label: c.label,
     n: valores.filter((v)=>v >= c.min && v < c.max).length,
@@ -1981,7 +1990,7 @@ function Torta({ partes }) {
             </svg>
             <span className="text-[13px] flex-1">{a.nombre}</span>
             <span className="font-mono tabular-nums text-[13px]">{C(a.valor)}</span>
-            <span className="font-mono tabular-nums text-[11px] text-stone-500 w-9 text-right">{(a.frac*100).toFixed(0)}%</span>
+            <span className="font-mono tabular-nums text-[11px] text-[var(--muted)] w-9 text-right">{(a.frac*100).toFixed(0)}%</span>
           </div>
         ))}
       </div>
@@ -2086,7 +2095,7 @@ function PagarFacturaModal({ g, guardar, aviso, onClose }) {
 
   return (
     <Modal title="Pagar factura" onClose={onClose}>
-      <div className="bg-stone-100 rounded-md p-3 mb-3 space-y-1">
+      <div className="bg-[var(--surface)] rounded-[8px] p-3 mb-3 space-y-1">
         <Linea label="Proveedor" val={g.detalle || g.categoria} />
         <Linea label="Recibida el" val={fmtFecha(g.fecha)} />
         {g.vence && <Linea label="Vence el" val={fmtFecha(g.vence)} />}
@@ -2111,7 +2120,7 @@ function PagarFacturaModal({ g, guardar, aviso, onClose }) {
       </div>
 
       {Math.abs(dif) > 0.5 && (
-        <p className="text-[12px] text-stone-700 border border-stone-400 rounded-md p-2 mb-3">
+        <p className="text-[12px] text-[var(--ink)] border border-[var(--line-strong)] rounded-[8px] p-2 mb-3">
           ◐ Estás pagando {C(Math.abs(dif))} {dif > 0 ? "más" : "menos"} que la factura. Si es un abono parcial, mejor editá el monto de la factura en Historial y dejá el resto como otra factura.
         </p>
       )}
@@ -2510,7 +2519,7 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
       </Card>
 
       {deudas.length > 0 && (
-        <Card className="p-4">
+        <Card nivel="atencion" className="p-4">
           <div className="flex items-baseline justify-between gap-3 mb-1">
             <span className="f-head text-[11px]">Facturas por pagar</span>
             <span className="f-mono text-[13px] font-semibold">{C(porPagar)}</span>
@@ -2701,32 +2710,32 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
 
       {meses.length>1 && (
         <div className="flex gap-2 overflow-x-auto pb-1">
-          {meses.map((m)=>(<button key={m} onClick={()=>setMes(m)} className={"px-3 py-1.5 rounded-full border text-xs whitespace-nowrap font-mono " + (mes===m ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{m}</button>))}
+          {meses.map((m)=>(<button key={m} onClick={()=>setMes(m)} className={"px-3 py-1.5 rounded-full border text-xs whitespace-nowrap font-mono " + (mes===m ? "bg-[var(--ink)] text-white border-[var(--ink)]" : "bg-white border-[var(--line-strong)]")}>{m}</button>))}
         </div>
       )}
 
       <Card className="p-4">
         <div className="flex justify-between items-baseline mb-1">
-          <span className="text-[11px] uppercase tracking-[0.15em] text-stone-500">Cómo se movió la plata en {mes}</span>
-          <span className="font-mono tabular-nums text-[12px] text-stone-500">{saldoFin - saldoIni >= 0 ? "+" : "−"}{C(Math.abs(saldoFin - saldoIni))}</span>
+          <span className="text-[11px] uppercase tracking-[0.15em] text-[var(--muted)]">Cómo se movió la plata en {mes}</span>
+          <span className="font-mono tabular-nums text-[12px] text-[var(--muted)]">{saldoFin - saldoIni >= 0 ? "+" : "−"}{C(Math.abs(saldoFin - saldoIni))}</span>
         </div>
         <Waterfall pasos={pasos} />
 
         {saldoIni < 0 && (
-          <div className="border border-stone-400 rounded-md p-3 mt-3">
+          <div className="border border-[var(--line-strong)] rounded-[8px] p-3 mt-3">
             <div className="text-[13px] font-medium mb-1">● El mes arranca en negativo</div>
-            <p className="text-[12px] text-stone-700 leading-relaxed">
+            <p className="text-[12px] text-[var(--ink)] leading-relaxed">
               La app no sabe cuánta plata había antes del primer registro, así que lo reconstruye hacia atrás y le da {C(saldoIni)}.
               Ponés el saldo real en Ajustes → "Saldo del banco al empezar a usar la app" y esta barra se acomoda sola.
             </p>
           </div>
         )}
 
-        <p className="text-[11px] text-stone-500 mt-1">
+        <p className="text-[11px] text-[var(--muted)] mt-1">
           Barras rellenas: saldo a favor o plata que entra. Barras huecas: plata que sale. El número gris de abajo es el saldo corriente.
         </p>
         {esMesActual && porPagar > 0 && (
-          <p className="text-[12px] text-stone-600 mt-2 leading-relaxed border-t border-[var(--line)] pt-2">
+          <p className="text-[12px] text-[var(--muted)] mt-2 leading-relaxed border-t border-[var(--line)] pt-2">
             Las dos barras punteadas de la derecha todavía no pasaron: son {C(porPagar)} en facturas de proveedor que ya se deben.
             Descontándolas quedan <span className="font-medium">{C(saldoFin - porPagar)}</span> de verdad disponibles.
             Cuando marqués una factura como pagada, deja de estar punteada y pasa a la barra de compra de mercadería del mes en que la pagaste.
@@ -2736,24 +2745,24 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
 
       <Card className="p-4">
         <div className="flex justify-between items-baseline mb-2">
-          <span className="text-[11px] uppercase tracking-[0.15em] text-stone-500">Todas las salidas de {mes}</span>
-          <span className="font-mono tabular-nums text-[12px] text-stone-500">{gMes.length} movimientos</span>
+          <span className="text-[11px] uppercase tracking-[0.15em] text-[var(--muted)]">Todas las salidas de {mes}</span>
+          <span className="font-mono tabular-nums text-[12px] text-[var(--muted)]">{gMes.length} movimientos</span>
         </div>
         {salidasDetalle.length === 0 ? (
-          <p className="text-sm text-stone-500">No hay salidas registradas este mes.</p>
+          <p className="text-sm text-[var(--muted)]">No hay salidas registradas este mes.</p>
         ) : (
           <>
             {salidasDetalle.map((x)=>(
-              <div key={x.cat} className="flex justify-between py-1.5 border-b border-stone-100 last:border-0 text-[13px]">
-                <span>{x.cat} <span className="text-stone-500 font-mono">· {x.n}</span></span>
+              <div key={x.cat} className="flex justify-between py-1.5 border-b border-[var(--line)] last:border-0 text-[13px]">
+                <span>{x.cat} <span className="text-[var(--muted)] font-mono">· {x.n}</span></span>
                 <span className="font-mono tabular-nums">{C(x.total)}</span>
               </div>
             ))}
-            <div className="flex justify-between pt-2 mt-1 border-t border-stone-300 text-sm font-semibold">
+            <div className="flex justify-between pt-2 mt-1 border-t border-[var(--line-strong)] text-sm font-semibold">
               <span>Total salido</span>
               <span className="font-mono tabular-nums">{C(salidasTot)}</span>
             </div>
-            <p className="text-[12px] text-stone-600 mt-2 leading-relaxed">
+            <p className="text-[12px] text-[var(--muted)] mt-2 leading-relaxed">
               {cuadraSalidas
                 ? "○ Este total calza exacto con lo que restan las barras del gráfico. Nada quedó por fuera."
                 : `● Hay ${C(Math.abs(salidasTot - gastosMesTot))} de diferencia contra el gráfico. Avisame si ves esto.`}
@@ -2762,37 +2771,37 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
         )}
 
         {montoPendiente > 0 && (
-          <div className="border border-stone-400 rounded-md p-3 mt-3">
+          <div className="border border-[var(--line-strong)] rounded-[8px] p-3 mt-3">
             <div className="text-[13px] font-medium mb-1">◐ Faltan {C(montoPendiente)} de gastos fijos por cargar</div>
-            <p className="text-[12px] text-stone-700 leading-relaxed mb-1">
+            <p className="text-[12px] text-[var(--ink)] leading-relaxed mb-1">
               {fijosPendientes.map((f)=>f.nombre).join(", ")} — están en la lista pero todavía no se registraron como salida de {mes}, así que no se descuentan de nada.
             </p>
-            <p className="text-[12px] text-stone-600">Se cargan en Registrar → Sale plata → Gastos fijos del mes.</p>
+            <p className="text-[12px] text-[var(--muted)]">Se cargan en Registrar → Sale plata → Gastos fijos del mes.</p>
           </div>
         )}
       </Card>
 
       <Card className="p-4">
-        <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-3">De ese movimiento, cuánto es ganancia</div>
+        <div className="text-[11px] uppercase tracking-[0.15em] text-[var(--muted)] mb-3">De ese movimiento, cuánto es ganancia</div>
         <div className="space-y-1">
           <Linea label="Se vendió" val={C(ventasMes)} />
           <Linea label="Lo que costó esa mercadería" val={"− " + C(costoVendido)} />
-          <div className="pt-1.5 mt-1 border-t border-stone-200"><Linea label="Ganancia sobre el producto" val={C(gananciaBruta)} /></div>
+          <div className="pt-1.5 mt-1 border-t border-[var(--line)]"><Linea label="Ganancia sobre el producto" val={C(gananciaBruta)} /></div>
           <Linea label="Gastos fijos del mes" val={"− " + C(fijosMes)} />
           <Linea label="Otros gastos" val={"− " + C(otrosMes)} />
-          <div className="pt-2 mt-1 border-t border-stone-300">
+          <div className="pt-2 mt-1 border-t border-[var(--line-strong)]">
             <Linea label={gananciaMes>=0 ? "★ Ganancia real del mes" : "● Pérdida del mes"} val={C(Math.abs(gananciaMes))} fuerte />
           </div>
         </div>
 
-        <div className="mt-4 pt-3 border-t border-stone-200 space-y-1">
+        <div className="mt-4 pt-3 border-t border-[var(--line)] space-y-1">
           <Linea label="Pero en plata el movimiento fue de" val={(flujoMes>=0?"+":"−") + C(Math.abs(flujoMes))} />
           <Linea
             label={enInventario >= 0 ? "Se vendió más de lo que se compró" : "Se compró más de lo que se vendió"}
             val={C(Math.abs(enInventario))}
           />
         </div>
-        <p className="text-[12px] text-stone-600 mt-3 leading-relaxed">
+        <p className="text-[12px] text-[var(--muted)] mt-3 leading-relaxed">
           {Math.abs(enInventario) < 1000
             ? "Compras y ventas van parejas, así que la plata que quedó se parece bastante a la ganancia real."
             : enInventario < 0
@@ -2803,28 +2812,28 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
 
       <div className="grid lg:grid-cols-2 gap-4 items-start">
       <Card className="p-4">
-        <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-3">Dónde está la plata</div>
+        <div className="text-[11px] uppercase tracking-[0.15em] text-[var(--muted)] mb-3">Dónde está la plata</div>
 
         <div className="space-y-3">
           <div>
             <div className="flex justify-between items-baseline">
               <div>
                 <div className="text-sm font-medium">En la caja</div>
-                <div className="text-[11px] text-stone-500">{ultimoCierre ? "desde el cierre del " + fmtFecha(ultimoCierre) : "sin cierres todavía"}</div>
+                <div className="text-[11px] text-[var(--muted)]">{ultimoCierre ? "desde el cierre del " + fmtFecha(ultimoCierre) : "sin cierres todavía"}</div>
               </div>
               <span className="font-mono tabular-nums text-lg">{C(caja)}</span>
             </div>
-            <div className="pl-3 mt-1 border-l-2 border-stone-300 space-y-0.5">
-              <div className="flex justify-between text-[12px] text-stone-600">
+            <div className="pl-3 mt-1 border-l-2 border-[var(--line-strong)] space-y-0.5">
+              <div className="flex justify-between text-[12px] text-[var(--muted)]">
                 <span>Fondo en billetes</span><span className="font-mono tabular-nums">{C(fondo)}</span>
               </div>
-              <div className="flex justify-between text-[12px] text-stone-600">
+              <div className="flex justify-between text-[12px] text-[var(--muted)]">
                 <span>Monedas y menudo</span><span className="font-mono tabular-nums">{C(monedas)}</span>
               </div>
-              <div className="flex justify-between text-[12px] text-stone-600">
+              <div className="flex justify-between text-[12px] text-[var(--muted)]">
                 <span>Ventas en efectivo sin cerrar</span><span className="font-mono tabular-nums">+ {C(efeEntra)}</span>
               </div>
-              <div className="flex justify-between text-[12px] text-stone-600">
+              <div className="flex justify-between text-[12px] text-[var(--muted)]">
                 <span>Pagos en efectivo sin cerrar</span><span className="font-mono tabular-nums">− {C(efeSale)}</span>
               </div>
             </div>
@@ -2834,10 +2843,10 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
             <div className="flex justify-between items-baseline">
               <div>
                 <div className="text-sm font-medium">
-                  {porDepositar !== 0 && <span className="text-stone-500 mr-1.5">{porDepositar > 0 ? "◐" : "●"}</span>}
+                  {porDepositar !== 0 && <span className="text-[var(--muted)] mr-1.5">{porDepositar > 0 ? "◐" : "●"}</span>}
                   Por depositar
                 </div>
-                <div className="text-[11px] text-stone-500">
+                <div className="text-[11px] text-[var(--muted)]">
                   {porDepositar > 0 ? "retirado de la caja y aún fuera del banco" : porDepositar < 0 ? "más depósitos que retiros de caja" : "todo depositado"}
                 </div>
               </div>
@@ -2870,36 +2879,36 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
           <div className="flex justify-between items-baseline">
             <div>
               <div className="text-sm font-medium">En el banco</div>
-              <div className="text-[11px] text-stone-500">SINPE, tarjeta y depósitos</div>
+              <div className="text-[11px] text-[var(--muted)]">SINPE, tarjeta y depósitos</div>
             </div>
             <span className="font-mono tabular-nums text-lg">{C(banco)}</span>
           </div>
 
-          <div className="pl-3 border-l-2 border-stone-300 space-y-0.5">
-            <div className="flex justify-between text-[12px] text-stone-600">
+          <div className="pl-3 border-l-2 border-[var(--line-strong)] space-y-0.5">
+            <div className="flex justify-between text-[12px] text-[var(--muted)]">
               <span>Saldo inicial configurado</span><span className="font-mono tabular-nums">{C(cfg.saldoBanco||0)}</span>
             </div>
-            <div className="flex justify-between text-[12px] text-stone-600">
+            <div className="flex justify-between text-[12px] text-[var(--muted)]">
               <span>Ventas por SINPE y tarjeta</span><span className="font-mono tabular-nums">+ {C(entraBanco)}</span>
             </div>
-            <div className="flex justify-between text-[12px] text-stone-600">
+            <div className="flex justify-between text-[12px] text-[var(--muted)]">
               <span>Depósitos registrados</span><span className="font-mono tabular-nums">+ {C(depositado)}</span>
             </div>
-            <div className="flex justify-between text-[12px] text-stone-600">
+            <div className="flex justify-between text-[12px] text-[var(--muted)]">
               <span>Gastos pagados del banco</span><span className="font-mono tabular-nums">− {C(saleBanco)}</span>
             </div>
-            <div className="flex justify-between text-[12px] text-stone-600">
+            <div className="flex justify-between text-[12px] text-[var(--muted)]">
               <span>Ajustes y cuadres</span><span className="font-mono tabular-nums">{ajustesTotal < 0 ? "− " : "+ "}{C(Math.abs(ajustesTotal))}</span>
             </div>
             {tarjetaPend > 0 && (
-              <div className="flex justify-between text-[12px] text-stone-600 pt-1 mt-1 border-t border-stone-200">
+              <div className="flex justify-between text-[12px] text-[var(--muted)] pt-1 mt-1 border-t border-[var(--line)]">
                 <span>◐ De eso, sin acreditar</span><span className="font-mono tabular-nums">{C(tarjetaPend)}</span>
               </div>
             )}
           </div>
         </div>
 
-        <div className="border-t border-stone-300 mt-3 pt-3 flex justify-between items-baseline">
+        <div className="border-t border-[var(--line-strong)] mt-3 pt-3 flex justify-between items-baseline">
           <span className="text-sm font-semibold">Total del negocio</span>
           <span className="font-mono tabular-nums text-xl font-semibold">{C(totalNegocio)}</span>
         </div>
@@ -2907,20 +2916,20 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
 
       {porDepositar > 0 && (
         <Card className="p-4">
-          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Falta llevar al banco</div>
+          <div className="text-[11px] uppercase tracking-[0.15em] text-[var(--muted)] mb-2">Falta llevar al banco</div>
           {pendientes.map((c)=>(
-            <div key={c.id} className="flex justify-between py-1.5 border-b border-stone-100 last:border-0 text-[13px]">
-              <span className="font-mono text-stone-600">
-                {diasDesde(new Date(c.fecha+"T12:00").getTime()) > 5 && <span className="text-stone-900 mr-1">●</span>}
+            <div key={c.id} className="flex justify-between py-1.5 border-b border-[var(--line)] last:border-0 text-[13px]">
+              <span className="font-mono text-[var(--muted)]">
+                {diasDesde(new Date(c.fecha+"T12:00").getTime()) > 5 && <span className="text-[var(--ink)] mr-1">●</span>}
                 {fmtFecha(c.fecha)}
-                <span className="text-stone-400"> · hace {diasDesde(new Date(c.fecha+"T12:00").getTime())} días</span>
+                <span className="text-[var(--muted)]"> · hace {diasDesde(new Date(c.fecha+"T12:00").getTime())} días</span>
               </span>
               <span className="font-mono tabular-nums">{C(c.falta)}</span>
             </div>
           ))}
           <Btn kind="warn" className="w-full mt-3 py-3" onClick={()=>setDepositar(true)}>Registrar depósito</Btn>
           {pendientes.some((c)=>diasDesde(new Date(c.fecha+"T12:00").getTime()) > 5) && (
-            <p className="text-[11px] text-stone-500 mt-2">● lleva más de 5 días fuera del banco.</p>
+            <p className="text-[11px] text-[var(--muted)] mt-2">● lleva más de 5 días fuera del banco.</p>
           )}
         </Card>
       )}
@@ -2936,24 +2945,24 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
 
       {historial.length > 0 && (
         <Card className="p-4">
-          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Movimientos</div>
+          <div className="text-[11px] uppercase tracking-[0.15em] text-[var(--muted)] mb-2">Movimientos</div>
           {historial.slice(0,30).map((m)=>(
-            <div key={m.id} className="flex justify-between items-center py-2 border-b border-stone-100 last:border-0">
+            <div key={m.id} className="flex justify-between items-center py-2 border-b border-[var(--line)] last:border-0">
               <div className="min-w-0">
                 <div className="text-sm">{m.tipo==="deposito" ? "Depósito al banco" : (m.metodo==="cuadre" ? "Cuadre con el banco" : "Ajuste de banco")}</div>
-                <div className="text-[11px] text-stone-500 font-mono truncate">{fmtFecha(m.fecha)}{m.nota ? " · " + m.nota : ""}</div>
-                {m.saldoDespues != null && <div className="text-[11px] text-stone-400 font-mono">quedó en {C(m.saldoDespues)}</div>}
+                <div className="text-[11px] text-[var(--muted)] font-mono truncate">{fmtFecha(m.fecha)}{m.nota ? " · " + m.nota : ""}</div>
+                {m.saldoDespues != null && <div className="text-[11px] text-[var(--muted)] font-mono">quedó en {C(m.saldoDespues)}</div>}
               </div>
               <div className="flex items-center gap-3 shrink-0">
                 <span className="font-mono tabular-nums text-sm">{m.monto < 0 ? "− " + C(Math.abs(m.monto)) : C(m.monto)}</span>
-                <button onClick={()=>borrar("movimientos", m.id)} className="text-stone-400 text-lg">×</button>
+                <button onClick={()=>borrar("movimientos", m.id)} className="text-[var(--muted)] text-lg">×</button>
               </div>
             </div>
           ))}
         </Card>
       )}
 
-      <p className="text-[11px] text-stone-500 leading-relaxed">
+      <p className="text-[11px] text-[var(--muted)] leading-relaxed">
         Las ventas por SINPE y tarjeta entran directo al banco. Las de efectivo se quedan en la caja hasta que cerrás el día. Al cerrar, solo los billetes que pasan del fondo van a "por depositar"; las monedas se quedan siempre en la caja.
       </p>
 
@@ -3023,7 +3032,7 @@ function LibroBancoModal({ libro, banco, tarjetaPend, bancoAcreditado, cfg, onCl
 
   return (
     <Modal title="De dónde sale el saldo del banco" onClose={onClose}>
-      <div className="bg-stone-100 rounded-md p-3 mb-3 space-y-1">
+      <div className="bg-[var(--surface)] rounded-[8px] p-3 mb-3 space-y-1">
         <Linea label="Saldo inicial configurado" val={C(cfg.saldoBanco||0)} />
         <Linea label="Después de todos los movimientos" val={C(banco)} fuerte />
         {tarjetaPend > 0 && (
@@ -3040,7 +3049,7 @@ function LibroBancoModal({ libro, banco, tarjetaPend, bancoAcreditado, cfg, onCl
       </div>
 
       {dif !== null && (
-        <div className="border border-stone-400 rounded-md p-3 mb-3">
+        <div className="border border-[var(--line-strong)] rounded-[8px] p-3 mb-3">
           <div className="flex justify-between items-baseline">
             <span className="text-sm font-medium">
               {Math.abs(dif) < 0.005 ? "○ Calza exacto" : dif > 0 ? "◐ El banco tiene más" : "● El banco tiene menos"}
@@ -3048,7 +3057,7 @@ function LibroBancoModal({ libro, banco, tarjetaPend, bancoAcreditado, cfg, onCl
             <span className="font-mono tabular-nums text-lg font-semibold">{C(Math.abs(dif))}</span>
           </div>
           {Math.abs(dif) >= 0.005 && (
-            <p className="text-[12px] text-stone-600 mt-2 leading-relaxed">
+            <p className="text-[12px] text-[var(--muted)] mt-2 leading-relaxed">
               Buscá la diferencia en la lista de abajo: una venta que entró como SINPE pero fue efectivo, un gasto sin registrar,
               o un ajuste manual que ya no corresponde. Cuando la encuentres, corregí el movimiento en vez de cuadrar encima.
             </p>
@@ -3057,31 +3066,31 @@ function LibroBancoModal({ libro, banco, tarjetaPend, bancoAcreditado, cfg, onCl
       )}
 
       {totalAjustes !== 0 && (
-        <button onClick={()=>setSoloAjustes(!soloAjustes)} className="w-full text-left px-3 py-2 border border-stone-300 rounded-md bg-stone-50 mb-3">
+        <button onClick={()=>setSoloAjustes(!soloAjustes)} className="w-full text-left px-3 py-2 border border-[var(--line-strong)] rounded-[8px] bg-[var(--surface)] mb-3">
           <div className="text-[13px]">{soloAjustes ? "○" : "—"} Ver solo los ajustes manuales</div>
-          <div className="text-[11px] text-stone-500 mt-0.5">Suman {C(totalAjustes)}. Son la causa más común de un saldo que no calza.</div>
+          <div className="text-[11px] text-[var(--muted)] mt-0.5">Suman {C(totalAjustes)}. Son la causa más común de un saldo que no calza.</div>
         </button>
       )}
 
-      <div className="border border-stone-200 rounded-md divide-y divide-stone-100 max-h-80 overflow-y-auto">
-        {lista.length === 0 && <p className="text-sm text-stone-500 p-3">Nada que mostrar.</p>}
+      <div className="border border-[var(--line)] rounded-[8px] divide-y divide-[var(--line)] max-h-80 overflow-y-auto">
+        {lista.length === 0 && <p className="text-sm text-[var(--muted)] p-3">Nada que mostrar.</p>}
         {lista.map((x,i)=>(
           <div key={i} className="px-3 py-2 flex justify-between items-start gap-2">
             <div className="min-w-0">
               <div className="text-[13px] truncate">
-                {x.clase==="ajuste" && <span className="text-stone-500 mr-1">◐</span>}
+                {x.clase==="ajuste" && <span className="text-[var(--muted)] mr-1">◐</span>}
                 {x.que}
               </div>
-              <div className="text-[11px] text-stone-500 font-mono truncate">{fmtFecha(x.fecha)} · {x.detalle}</div>
+              <div className="text-[11px] text-[var(--muted)] font-mono truncate">{fmtFecha(x.fecha)} · {x.detalle}</div>
             </div>
             <div className="text-right shrink-0">
               <div className="font-mono tabular-nums text-[13px]">{x.monto < 0 ? "− " + C(Math.abs(x.monto)) : "+ " + C(x.monto)}</div>
-              <div className="font-mono tabular-nums text-[10px] text-stone-400">{C(x.saldo)}</div>
+              <div className="font-mono tabular-nums text-[10px] text-[var(--muted)]">{C(x.saldo)}</div>
             </div>
           </div>
         ))}
       </div>
-      <p className="text-[11px] text-stone-500 mt-2">
+      <p className="text-[11px] text-[var(--muted)] mt-2">
         El número gris de la derecha es el saldo después de ese movimiento. Recorré hacia atrás hasta encontrar el punto donde dejó de calzar con tu banco.
       </p>
     </Modal>
@@ -3097,7 +3106,7 @@ function DepositoModal({ sugerido, porDepositar, guardar, usuario, aviso, onClos
 
   return (
     <Modal title="Registrar depósito" onClose={onClose}>
-      <p className="text-[13px] text-stone-600 mb-3 leading-relaxed">
+      <p className="text-[13px] text-[var(--muted)] mb-3 leading-relaxed">
         La plata que sacaste de la caja y llevaste al banco. Sale de "por depositar" y entra al saldo bancario.
       </p>
       <div className="grid grid-cols-3 gap-2 mb-3">
@@ -3106,14 +3115,14 @@ function DepositoModal({ sugerido, porDepositar, guardar, usuario, aviso, onClos
       </div>
       <div className="mb-3"><Lbl>Nota (opcional)</Lbl><Inp value={nota} onChange={(e)=>setNota(e.target.value)} placeholder="Depósito BAC, comprobante 4471" /></div>
 
-      <div className="bg-stone-100 rounded-md p-3 mb-3 space-y-1">
+      <div className="bg-[var(--surface)] rounded-[8px] p-3 mb-3 space-y-1">
         <Linea label="Estaba pendiente" val={C(porDepositar)} />
         <Linea label="Se deposita" val={C(m)} />
-        <div className="pt-2 mt-1 border-t border-stone-300">
+        <div className="pt-2 mt-1 border-t border-[var(--line-strong)]">
           <Linea label={queda >= 0 ? "Queda pendiente" : "Se depositó de más"} val={C(Math.abs(queda))} fuerte />
         </div>
       </div>
-      {queda < 0 && <p className="text-[12px] text-stone-700 border border-stone-400 rounded-md p-2 mb-3">◐ Estás depositando más de lo que salió de la caja. Si es plata de otro lado, mejor registrala como ajuste de banco.</p>}
+      {queda < 0 && <p className="text-[12px] text-[var(--ink)] border border-[var(--line-strong)] rounded-[8px] p-2 mb-3">◐ Estás depositando más de lo que salió de la caja. Si es plata de otro lado, mejor registrala como ajuste de banco.</p>}
 
       <Btn kind="warn" className="w-full py-3" disabled={m<=0} onClick={async ()=>{
         await guardar("movimientos", { id: UID(), tipo:"deposito", fecha, monto: m, nota: nota.trim(), usuario, creado: Date.now() });
@@ -3169,37 +3178,37 @@ function AjusteBancoModal({ banco, bancoAcreditado, tarjetaPend, cfg, guardar, u
     <Modal title="Cuadrar banco" onClose={onClose}>
       <div className="grid grid-cols-2 gap-1.5 mb-3">
         {[["cuadrar","Poner el saldo real"],["manual","Sumar o restar"]].map(([id,l])=>(
-          <button key={id} onClick={()=>setModo(id)} className={"py-2 rounded-md border text-[13px] " + (modo===id ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{l}</button>
+          <button key={id} onClick={()=>setModo(id)} className={"py-2 rounded-[8px] border text-[13px] " + (modo===id ? "bg-[var(--ink)] text-white border-[var(--ink)]" : "bg-white border-[var(--line-strong)]")}>{l}</button>
         ))}
       </div>
 
       {modo === "cuadrar" ? (
         <>
-          <p className="text-[13px] text-stone-600 mb-3 leading-relaxed">
+          <p className="text-[13px] text-[var(--muted)] mb-3 leading-relaxed">
             Escribí lo que dice el estado de cuenta y la app calcula sola la diferencia.
           </p>
 
           <div className="mb-3">
             <Lbl>Saldo real en la cuenta</Lbl>
             <Inp inputMode="decimal" value={saldoReal} onChange={(e)=>setSaldoReal(e.target.value)} placeholder="181019,28" className="font-mono tabular-nums text-2xl" />
-            <p className="text-[11px] text-stone-500 mt-1">Se puede escribir con coma para los céntimos.</p>
+            <p className="text-[11px] text-[var(--muted)] mt-1">Se puede escribir con coma para los céntimos.</p>
           </div>
 
           {tarjetaPend > 0 && (
             <button
               onClick={()=>setExcluirTarjeta(!excluirTarjeta)}
-              className="w-full text-left px-3 py-2 border border-stone-300 rounded-md bg-stone-50 mb-3"
+              className="w-full text-left px-3 py-2 border border-[var(--line-strong)] rounded-[8px] bg-[var(--surface)] mb-3"
             >
               <div className="text-[13px]">
                 {excluirTarjeta ? "○" : "—"} Ese saldo aún no incluye las tarjetas
               </div>
-              <div className="text-[11px] text-stone-500 mt-0.5">
+              <div className="text-[11px] text-[var(--muted)] mt-0.5">
                 {C(tarjetaPend)} en tarjetas de hoy quedan fuera de la comparación
               </div>
             </button>
           )}
 
-          <div className="bg-stone-100 rounded-md p-3 mb-3 space-y-1">
+          <div className="bg-[var(--surface)] rounded-[8px] p-3 mb-3 space-y-1">
             <Linea label="La app dice que hay" val={C(banco)} />
             {excluirTarjeta && tarjetaPend > 0 && (
               <>
@@ -3208,7 +3217,7 @@ function AjusteBancoModal({ banco, bancoAcreditado, tarjetaPend, cfg, guardar, u
               </>
             )}
             {difCuadre !== null && (
-              <div className="pt-2 mt-1 border-t border-stone-300">
+              <div className="pt-2 mt-1 border-t border-[var(--line-strong)]">
                 <Linea
                   label={Math.abs(difCuadre) < 0.005 ? "○ Cuadra exacto" : difCuadre > 0 ? "◐ Hay más en el banco" : "● Hay menos en el banco"}
                   val={C(Math.abs(difCuadre))}
@@ -3220,19 +3229,19 @@ function AjusteBancoModal({ banco, bancoAcreditado, tarjetaPend, cfg, guardar, u
         </>
       ) : (
         <>
-          <p className="text-[13px] text-stone-600 mb-3 leading-relaxed">
+          <p className="text-[13px] text-[var(--muted)] mb-3 leading-relaxed">
             Para sumar o restar un monto puntual sin tocar el resto del cálculo.
           </p>
           <div className="grid grid-cols-2 gap-1.5 mb-3">
             {[["mas","Entró al banco"],["menos","Salió del banco"]].map(([id,l])=>(
-              <button key={id} onClick={()=>setSigno(id)} className={"py-2 rounded-md border text-[13px] " + (signo===id ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{l}</button>
+              <button key={id} onClick={()=>setSigno(id)} className={"py-2 rounded-[8px] border text-[13px] " + (signo===id ? "bg-[var(--ink)] text-white border-[var(--ink)]" : "bg-white border-[var(--line-strong)]")}>{l}</button>
             ))}
           </div>
           <div className="mb-3">
             <Lbl>Monto</Lbl>
             <Inp inputMode="decimal" value={monto} onChange={(e)=>setMonto(e.target.value)} className="font-mono tabular-nums text-2xl" />
           </div>
-          <div className="bg-stone-100 rounded-md p-3 mb-3 space-y-1">
+          <div className="bg-[var(--surface)] rounded-[8px] p-3 mb-3 space-y-1">
             <Linea label="Saldo actual" val={C(banco)} />
             <Linea label="Queda en" val={C(banco + manual)} fuerte />
           </div>
@@ -3243,7 +3252,7 @@ function AjusteBancoModal({ banco, bancoAcreditado, tarjetaPend, cfg, guardar, u
         <Lbl>A qué se debe · obligatorio</Lbl>
         <div className="flex flex-wrap gap-1.5 mb-2">
           {RAZONES.map((r)=>(
-            <button key={r} onClick={()=>setRazon(razon===r ? "" : r)} className={"px-2.5 py-1.5 rounded-full border text-[12px] " + (razon===r ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{r}</button>
+            <button key={r} onClick={()=>setRazon(razon===r ? "" : r)} className={"px-2.5 py-1.5 rounded-full border text-[12px] " + (razon===r ? "bg-[var(--ink)] text-white border-[var(--ink)]" : "bg-white border-[var(--line-strong)]")}>{r}</button>
           ))}
         </div>
         <Inp value={nota} onChange={(e)=>setNota(e.target.value)} placeholder="Detalle, número de comprobante…" />
@@ -3255,7 +3264,7 @@ function AjusteBancoModal({ banco, bancoAcreditado, tarjetaPend, cfg, guardar, u
       </div>
 
       {!motivo && Math.abs(ajuste) > 0.004 && (
-        <p className="text-[12px] text-stone-700 border border-stone-400 rounded-md p-2 mb-3">
+        <p className="text-[12px] text-[var(--ink)] border border-[var(--line-strong)] rounded-[8px] p-2 mb-3">
           ● Falta la razón. Sin eso, en tres meses nadie va a saber por qué se movió el saldo.
         </p>
       )}
@@ -3462,15 +3471,15 @@ function PrecioModal({ p, cfg, onClose, onSave, onDelete }) {
       <div className="mb-3"><Lbl>Artículo</Lbl><Inp value={f.nombre} onChange={(e)=>setF({...f, nombre:e.target.value})} placeholder="Dog chow raza pequeña" /></div>
       <div className="grid grid-cols-3 gap-2 mb-3">
         <div><Lbl>Contenido</Lbl><Inp inputMode="decimal" value={f.peso} onChange={(e)=>setF({...f, peso:e.target.value})} className="font-mono" /></div>
-        <div><Lbl>Unidad</Lbl><button onClick={()=>setF({...f, unidad: f.unidad==="kg" ? "u" : "kg"})} className="w-full px-3 py-2 border border-stone-300 rounded-md bg-stone-50 font-mono text-sm">{f.unidad==="kg" ? "kg" : "unid."}</button></div>
+        <div><Lbl>Unidad</Lbl><button onClick={()=>setF({...f, unidad: f.unidad==="kg" ? "u" : "kg"})} className="w-full px-3 py-2 border border-[var(--line-strong)] rounded-[8px] bg-[var(--surface)] font-mono text-sm">{f.unidad==="kg" ? "kg" : "unid."}</button></div>
         <div><Lbl>Costo total</Lbl><Inp inputMode="decimal" value={f.costo} onChange={(e)=>setF({...f, costo:e.target.value})} className="font-mono" /></div>
       </div>
-      <div className="bg-stone-100 rounded-md p-3 mb-3"><Linea label={`Costo por ${f.unidad==="kg" ? "kilo" : "unidad"}`} val={C(ck)} fuerte /></div>
+      <div className="bg-[var(--surface)] rounded-[8px] p-3 mb-3"><Linea label={`Costo por ${f.unidad==="kg" ? "kilo" : "unidad"}`} val={C(ck)} fuerte /></div>
       <div className="mb-3">
         <Lbl>Precio de venta al granel</Lbl>
         <Inp inputMode="decimal" value={f.precioKilo} onChange={(e)=>setF({...f, precioKilo:e.target.value})} className="font-mono text-lg" />
         <div className="flex justify-between text-[11px] mt-1">
-          <span className="text-stone-500">Para {cfg.margenGranel}%: {C(conIVA(ck/(1-cfg.margenGranel/100)))}</span>
+          <span className="text-[var(--muted)]">Para {cfg.margenGranel}%: {C(conIVA(ck/(1-cfg.margenGranel/100)))}</span>
           <span className="font-mono">{mg===null ? "—" : ind(mg,cfg.margenGranel).s + " " + mg.toFixed(1)+"%"}</span>
         </div>
       </div>
@@ -3478,11 +3487,11 @@ function PrecioModal({ p, cfg, onClose, onSave, onDelete }) {
         <Lbl>Precio del saco o empaque completo</Lbl>
         <Inp inputMode="decimal" value={f.precioSaco} onChange={(e)=>setF({...f, precioSaco:e.target.value})} className="font-mono text-lg" />
         <div className="flex justify-between text-[11px] mt-1">
-          <span className="text-stone-500">Para {cfg.margenSaco}%: {C(conIVA(costo/(1-cfg.margenSaco/100)))}</span>
+          <span className="text-[var(--muted)]">Para {cfg.margenSaco}%: {C(conIVA(costo/(1-cfg.margenSaco/100)))}</span>
           <span className="font-mono">{ms===null ? "—" : ind(ms,cfg.margenSaco).s + " " + ms.toFixed(1)+"%"}</span>
         </div>
         {num(f.precioKilo)>0 && num(f.precioSaco)>0 && peso>0 && (
-          <p className="text-[11px] text-stone-500 mt-1">Comprando el saco pagan {C(num(f.precioSaco)/peso)} por {f.unidad==="kg" ? "kilo" : "unidad"}, {(100-(num(f.precioSaco)/peso/num(f.precioKilo))*100).toFixed(0)}% menos que al granel.</p>
+          <p className="text-[11px] text-[var(--muted)] mt-1">Comprando el saco pagan {C(num(f.precioSaco)/peso)} por {f.unidad==="kg" ? "kilo" : "unidad"}, {(100-(num(f.precioSaco)/peso/num(f.precioKilo))*100).toFixed(0)}% menos que al granel.</p>
         )}
       </div>
       <div className="flex gap-2">
@@ -3509,13 +3518,13 @@ function ImportPreciosModal({ onClose, onSave }) {
   const sacos = filas.filter((f)=>f._saco);
   return (
     <Modal title="Pegar tabla de costos" onClose={onClose}>
-      <p className="text-[13px] text-stone-600 mb-2 leading-relaxed">Se leen <span className="font-medium">artículo, peso, costo</span> y la <span className="font-medium">última</span> columna como precio de venta. Las intermedias se ignoran porque el margen se recalcula.</p>
-      <textarea value={txt} onChange={(e)=>setTxt(e.target.value)} rows={7} placeholder={"Dog chow raza pequeña\t25\t₡42,500\t₡1,700\t20%\t₡2,125\t₡2,200"} className="w-full px-3 py-2 border border-stone-300 rounded-md bg-stone-50 font-mono text-[12px]" />
+      <p className="text-[13px] text-[var(--muted)] mb-2 leading-relaxed">Se leen <span className="font-medium">artículo, peso, costo</span> y la <span className="font-medium">última</span> columna como precio de venta. Las intermedias se ignoran porque el margen se recalcula.</p>
+      <textarea value={txt} onChange={(e)=>setTxt(e.target.value)} rows={7} placeholder={"Dog chow raza pequeña\t25\t₡42,500\t₡1,700\t20%\t₡2,125\t₡2,200"} className="w-full px-3 py-2 border border-[var(--line-strong)] rounded-[8px] bg-[var(--surface)] font-mono text-[12px]" />
       <div className="my-3 text-sm">
-        {txt.trim()==="" ? <span className="text-stone-500">Esperando las filas.</span> : (
+        {txt.trim()==="" ? <span className="text-[var(--muted)]">Esperando las filas.</span> : (
           <>
             <Linea label="Artículos reconocidos" val={String(filas.length)} fuerte />
-            {sacos.length>0 && <p className="text-[12px] text-stone-600 mt-2 leading-relaxed">◐ En {sacos.length} filas el precio parece ser del empaque completo ({sacos.slice(0,3).map((s)=>s.nombre).join(", ")}{sacos.length>3?"…":""}). Se guardan como precio de saco.</p>}
+            {sacos.length>0 && <p className="text-[12px] text-[var(--muted)] mt-2 leading-relaxed">◐ En {sacos.length} filas el precio parece ser del empaque completo ({sacos.slice(0,3).map((s)=>s.nombre).join(", ")}{sacos.length>3?"…":""}). Se guardan como precio de saco.</p>}
           </>
         )}
       </div>
@@ -3826,7 +3835,7 @@ function Analisis({ ventas, gastos, precios, enlaces, cierres, cfg }) {
       </div>
 
       {/* ---------- decisiones ---------- */}
-      <Card className="p-4">
+      <Card nivel="principal" className="p-4">
         <div className="flex items-baseline justify-between gap-3 mb-3">
           <span className="f-head text-[11px]">Qué hacer este mes</span>
           {plataTotal > 0 && (
@@ -4121,7 +4130,7 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, movs, cfg,
     <div className="space-y-4">
       {meses.length>1 && (
         <div className="flex gap-2 overflow-x-auto pb-1">
-          {meses.map((m)=>(<button key={m} onClick={()=>setMes(m)} className={"px-3 py-1.5 rounded-full border text-xs whitespace-nowrap font-mono " + (mes===m ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{m}</button>))}
+          {meses.map((m)=>(<button key={m} onClick={()=>setMes(m)} className={"px-3 py-1.5 rounded-full border text-xs whitespace-nowrap font-mono " + (mes===m ? "bg-[var(--ink)] text-white border-[var(--ink)]" : "bg-white border-[var(--line-strong)]")}>{m}</button>))}
         </div>
       )}
 
@@ -4137,36 +4146,36 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, movs, cfg,
       {porDia.length>0 && (
         <Card className="p-4">
           <div className="flex justify-between items-baseline mb-2">
-            <span className="text-[11px] uppercase tracking-[0.15em] text-stone-500">Venta día por día</span>
-            <span className="font-mono tabular-nums text-[12px] text-stone-500">promedio {C(promDia)}</span>
+            <span className="text-[11px] uppercase tracking-[0.15em] text-[var(--muted)]">Venta día por día</span>
+            <span className="font-mono tabular-nums text-[12px] text-[var(--muted)]">promedio {C(promDia)}</span>
           </div>
           <GraficoDias datos={porDia} referencia={metaDiaria} />
-          <p className="text-[11px] text-stone-500 mt-2">Las barras huecas son los días que quedaron bajo la meta diaria.</p>
+          <p className="text-[11px] text-[var(--muted)] mt-2">Las barras huecas son los días que quedaron bajo la meta diaria.</p>
         </Card>
       )}
 
       <div className="grid lg:grid-cols-2 gap-4 items-start">
 
       {/* ---------- 1. LO ESENCIAL ---------- */}
-      <Card className="p-4">
-        <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-3">{titulo(nomMes)}</div>
+      <Card nivel="principal" className="p-4">
+        <div className="text-[11px] uppercase tracking-[0.15em] text-[var(--muted)] mb-3">{titulo(nomMes)}</div>
 
         <div className="mb-4">
-          <div className="text-[11px] text-stone-500">Vendimos</div>
-          <div className="font-mono tabular-nums text-3xl font-semibold">{C(total)}</div>
-          <div className="text-[12px] text-stone-500">{delMes.length} ventas · {C(ticket)} cada una en promedio</div>
+          <div className="text-[11px] text-[var(--muted)]">Vendimos</div>
+          <div className="font-mono tabular-nums text-2xl">{C(total)}</div>
+          <div className="text-[12px] text-[var(--muted)]">{delMes.length} ventas · {C(ticket)} cada una en promedio</div>
         </div>
 
-        <div className="border-t border-stone-200 pt-3 mb-4">
-          <div className="text-[11px] text-stone-500">De eso, la ganancia del producto fue</div>
-          <div className="font-mono tabular-nums text-2xl font-semibold">{C(gananciaBruta)}</div>
-          <div className="text-[12px] text-stone-500">{margenBruto.toFixed(0)}% de lo vendido · lo demás es lo que costó la comida</div>
+        <div className="border-t border-[var(--line)] pt-3 mb-4">
+          <div className="text-[11px] text-[var(--muted)]">De eso, la ganancia del producto fue</div>
+          <div className="font-mono tabular-nums text-2xl">{C(gananciaBruta)}</div>
+          <div className="text-[12px] text-[var(--muted)]">{margenBruto.toFixed(0)}% de lo vendido · lo demás es lo que costó la comida</div>
         </div>
 
-        <div className="border-t border-stone-200 pt-3">
-          <div className="text-[11px] text-stone-500">Menos los gastos fijos que ya se pagaron ({C(fijosPagados)}), quedan</div>
-          <div className="font-mono tabular-nums text-2xl font-semibold">{C(gananciaNeta)}</div>
-          <div className="text-[12px] text-stone-500">
+        <div className="border-t border-[var(--line)] pt-3">
+          <div className="text-[11px] text-[var(--muted)]">Menos los gastos fijos que ya se pagaron ({C(fijosPagados)}), quedan</div>
+          <div className="font-mono tabular-nums text-[34px] leading-none font-semibold tracking-[-.02em] my-0.5">{C(gananciaNeta)}</div>
+          <div className="text-[12px] text-[var(--muted)]">
             {gananciaNeta >= 0 ? "Esto es lo que el negocio generó de verdad este mes." : "El mes va en pérdida: la ganancia no alcanzó para cubrir los fijos."}
           </div>
         </div>
@@ -4174,16 +4183,16 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, movs, cfg,
 
       {/* ---------- 2. CONFIANZA DEL CÁLCULO ---------- */}
       <Card className="p-4">
-        <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Qué tan exacta es esa ganancia</div>
+        <div className="text-[11px] uppercase tracking-[0.15em] text-[var(--muted)] mb-2">Qué tan exacta es esa ganancia</div>
         <div className="space-y-1">
           <Linea label="Con costo real del producto" val={`${C(analisis.ventaId)} · ${analisis.cobertura.toFixed(0)}% de las ventas`} />
           <Linea label="Margen real de esas ventas" val={margenId===null ? "—" : margenId.toFixed(1)+"%"} />
           <Linea label={`Estimado al ${cfg.margenNoIdent != null ? cfg.margenNoIdent : 18}% de margen`} val={C(analisis.sinId)} />
         </div>
-        <div className="h-2 bg-stone-200 rounded-full overflow-hidden mt-3 border border-stone-300">
-          <div className="h-full bg-stone-900" style={{ width: Math.min(100, analisis.cobertura)+"%" }} />
+        <div className="h-2 bg-[rgba(22,33,28,.10)] rounded-full overflow-hidden mt-3 border border-[var(--line-strong)]">
+          <div className="h-full bg-[var(--ink)]" style={{ width: Math.min(100, analisis.cobertura)+"%" }} />
         </div>
-        <p className="text-[12px] text-stone-600 mt-3 leading-relaxed">
+        <p className="text-[12px] text-[var(--muted)] mt-3 leading-relaxed">
           {analisis.cobertura >= 90
             ? "★ Casi todas las ventas están cruzadas con la tabla de costos, así que la ganancia de arriba es confiable."
             : `◐ Quedan ${analisis.sinLista.length} nombres de producto que no calzan con la tabla de precios. Enlazalos y el número de arriba deja de ser una estimación.`}
@@ -4198,18 +4207,18 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, movs, cfg,
       {/* ---------- 3. META ---------- */}
       <Card className="p-4">
         <div className="flex justify-between items-baseline mb-2">
-          <span className="text-[11px] uppercase tracking-[0.15em] text-stone-500">Meta del mes</span>
+          <span className="text-[11px] uppercase tracking-[0.15em] text-[var(--muted)]">Meta del mes</span>
           <span className="font-mono tabular-nums text-sm">{C(total)} / {C(cfg.meta)}</span>
         </div>
-        <div className="h-3 bg-stone-200 rounded-full overflow-hidden border border-stone-300"><div className="h-full bg-stone-900" style={{ width: Math.min(100,avance)+"%" }} /></div>
+        <div className="h-3 bg-[rgba(22,33,28,.10)] rounded-full overflow-hidden border border-[var(--line-strong)]"><div className="h-full bg-[var(--ink)]" style={{ width: Math.min(100,avance)+"%" }} /></div>
         <div className="mt-2 font-mono tabular-nums text-sm">{avance.toFixed(0)}% de la meta</div>
-        <div className="mt-3 pt-3 border-t border-stone-200 space-y-1">
+        <div className="mt-3 pt-3 border-t border-[var(--line)] space-y-1">
           <Linea label={`Promedio por día${cfg.excluirDomingos ? " (sin domingos)" : ""}`} val={C(promDia)} />
           <Linea label="Si sigue así, cierra en" val={C(proy)} fuerte />
           {esMesActual && <Linea label="Días de venta que faltan" val={String(habTotal-habT)} />}
         </div>
         {totalFijos>0 && (
-          <p className="text-[12px] text-stone-600 mt-3 pt-3 border-t border-stone-200 leading-relaxed">
+          <p className="text-[12px] text-[var(--muted)] mt-3 pt-3 border-t border-[var(--line)] leading-relaxed">
             Para cubrir los {C(totalFijos)} de gastos fijos con un margen del {margenBruto.toFixed(0)}%, hay que vender <span className="font-medium">{C(equilibrio)}</span> al mes.
             {total >= equilibrio ? ` Ya se pasó por ${C(total-equilibrio)}.` : ` Faltan ${C(equilibrio-total)}.`}
           </p>
@@ -4219,47 +4228,47 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, movs, cfg,
       {/* ---------- 4. GANANCIA POR PRODUCTO ---------- */}
       {analisis.productos.length>0 && (
         <Card className="p-4">
-          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-1">Cuánto deja cada producto</div>
-          <p className="text-[11px] text-stone-500 mb-3">Solo los que están enlazados a la tabla de costos. Ordenados por ganancia.</p>
+          <div className="text-[11px] uppercase tracking-[0.15em] text-[var(--muted)] mb-1">Cuánto deja cada producto</div>
+          <p className="text-[11px] text-[var(--muted)] mb-3">Solo los que están enlazados a la tabla de costos. Ordenados por ganancia.</p>
           {analisis.productos.map((x,i)=>{
             const ix = ind(x.pct, cfg.margenGranel);
             return (
-              <div key={i} className="py-2 border-b border-stone-100 last:border-0">
+              <div key={i} className="py-2 border-b border-[var(--line)] last:border-0">
                 <div className="flex justify-between text-sm">
-                  <span className="font-medium truncate mr-2"><span className="text-stone-500 mr-1.5" title={ix.t}>{ix.s}</span>{x.nombre}</span>
+                  <span className="font-medium truncate mr-2"><span className="text-[var(--muted)] mr-1.5" title={ix.t}>{ix.s}</span>{x.nombre}</span>
                   <span className="font-mono tabular-nums font-semibold shrink-0">{C(x.gan)}</span>
                 </div>
-                <div className="flex justify-between text-[11px] text-stone-500 font-mono tabular-nums mt-0.5">
+                <div className="flex justify-between text-[11px] text-[var(--muted)] font-mono tabular-nums mt-0.5">
                   <span>{x.veces}× · vendido {C(x.venta)} · costó {C(x.costo)}</span>
                   <span>{x.pct.toFixed(0)}%</span>
                 </div>
               </div>
             );
           })}
-          <p className="text-[11px] text-stone-500 mt-2">★ sobre la meta de {cfg.margenGranel}% · ○ en meta · ◐ apenas debajo · ● margen muy bajo</p>
+          <p className="text-[11px] text-[var(--muted)] mt-2">★ sobre la meta de {cfg.margenGranel}% · ○ en meta · ◐ apenas debajo · ● margen muy bajo</p>
         </Card>
       )}
 
       {/* ---------- 5. CAJA ---------- */}
       <Card className="p-4">
-        <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Movimiento de plata</div>
+        <div className="text-[11px] uppercase tracking-[0.15em] text-[var(--muted)] mb-2">Movimiento de plata</div>
         <div className="space-y-1">
           <Linea label="Entró por ventas" val={C(total)} />
           <Linea label="Salió en compras y gastos" val={"− " + C(salidas)} />
-          <div className="pt-2 mt-1 border-t border-stone-200"><Linea label={total-salidas>=0 ? "Diferencia a favor" : "Diferencia en contra"} val={C(Math.abs(total-salidas))} fuerte /></div>
+          <div className="pt-2 mt-1 border-t border-[var(--line)]"><Linea label={total-salidas>=0 ? "Diferencia a favor" : "Diferencia en contra"} val={C(Math.abs(total-salidas))} fuerte /></div>
         </div>
-        <div className="mt-3 pt-3 border-t border-stone-200 space-y-1">
+        <div className="mt-3 pt-3 border-t border-[var(--line)] space-y-1">
           <Linea label="Efectivo generado en el mes" val={C(efectivoNeto)} />
           <Linea label="Se invirtió en mercadería" val={C(mercaderia)} />
         </div>
-        <p className="text-[12px] text-stone-600 mt-3 leading-relaxed">
+        <p className="text-[12px] text-[var(--muted)] mt-3 leading-relaxed">
           Esta tarjeta es plata que entró y salió del bolsillo, no ganancia. Un mes que comprás mucha mercadería se ve mal aunque el negocio esté bien, porque esa comida se vende en los meses siguientes. Para saber si ganaron, mirá la primera tarjeta.
         </p>
       </Card>
 
       {cierres.filter((c)=>mesDe(c.fecha)===mes).length>0 && (
         <Card className="p-4">
-          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Cuadre de caja</div>
+          <div className="text-[11px] uppercase tracking-[0.15em] text-[var(--muted)] mb-2">Cuadre de caja</div>
           {(()=>{
             const cs = cierres.filter((c)=>mesDe(c.fecha)===mes).sort((a,b)=>(a.fecha<b.fecha?1:-1));
             const acum = cs.reduce((a,c)=>a+(c.diferencia||0),0);
@@ -4271,12 +4280,12 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, movs, cfg,
                   <Linea label={acum===0 ? "Diferencia acumulada" : acum>0 ? "Sobrante acumulado" : "Faltante acumulado"} val={C(Math.abs(acum))} fuerte />
                 </div>
                 {cs.slice(0,10).map((c)=>(
-                  <div key={c.id} className="flex justify-between py-1 text-[13px] border-b border-stone-100 last:border-0">
-                    <span className="font-mono text-stone-600">{fmtFecha(c.fecha)}{c.nota && <span className="text-stone-400"> · {c.nota}</span>}</span>
+                  <div key={c.id} className="flex justify-between py-1 text-[13px] border-b border-[var(--line)] last:border-0">
+                    <span className="font-mono text-[var(--muted)]">{fmtFecha(c.fecha)}{c.nota && <span className="text-[var(--muted)]"> · {c.nota}</span>}</span>
                     <span className="font-mono tabular-nums">{c.diferencia===0 ? "○ cuadró" : (c.diferencia>0 ? "◐ +" : "● −") + C(Math.abs(c.diferencia))}</span>
                   </div>
                 ))}
-                <p className="text-[12px] text-stone-600 mt-3 leading-relaxed">
+                <p className="text-[12px] text-[var(--muted)] mt-3 leading-relaxed">
                   Una diferencia suelta es vuelto. Lo que hay que mirar es el acumulado y si siempre falta en los mismos días.
                 </p>
               </>
@@ -4287,18 +4296,18 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, movs, cfg,
 
       {porVolver.length>0 && (
         <Card className="p-4">
-          <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-1">Clientes que ya deberían haber vuelto</div>
-          <p className="text-[11px] text-stone-500 mb-3">Según cada cuánto compran normalmente. Son {C(porVolver.reduce((a,c)=>a+c.ticket,0))} en compras que no llegaron.</p>
+          <div className="text-[11px] uppercase tracking-[0.15em] text-[var(--muted)] mb-1">Clientes que ya deberían haber vuelto</div>
+          <p className="text-[11px] text-[var(--muted)] mb-3">Según cada cuánto compran normalmente. Son {C(porVolver.reduce((a,c)=>a+c.ticket,0))} en compras que no llegaron.</p>
           {porVolver.slice(0,15).map((c,i)=>(
-            <div key={i} className="flex justify-between items-baseline py-1.5 border-b border-stone-100 last:border-0">
+            <div key={i} className="flex justify-between items-baseline py-1.5 border-b border-[var(--line)] last:border-0">
               <div className="min-w-0">
                 <div className="text-sm truncate">{c.nombre}</div>
-                <div className="text-[11px] text-stone-500 font-mono">compra cada {c.cadencia} días · última hace {c.desde}</div>
+                <div className="text-[11px] text-[var(--muted)] font-mono">compra cada {c.cadencia} días · última hace {c.desde}</div>
               </div>
               <span className="font-mono tabular-nums text-[12px] shrink-0 ml-2">{c.atraso} días tarde</span>
             </div>
           ))}
-          <p className="text-[12px] text-stone-600 mt-3 leading-relaxed">
+          <p className="text-[12px] text-[var(--muted)] mt-3 leading-relaxed">
             Esta es la lista para reactivar por correo o WhatsApp. Se calcula con todo el historial, no solo con este mes.
           </p>
         </Card>
@@ -4306,7 +4315,7 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, movs, cfg,
 
       </div>
 
-      <button onClick={()=>setDetalle(!detalle)} className="w-full text-center text-[12px] text-stone-600 underline py-1">
+      <button onClick={()=>setDetalle(!detalle)} className="w-full text-center text-[12px] text-[var(--muted)] underline py-1">
         {detalle ? "Ocultar el detalle" : "Ver más detalle (pagos, días, clientes)"}
       </button>
 
@@ -4314,28 +4323,28 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, movs, cfg,
         <div className="grid lg:grid-cols-2 gap-4 items-start">
           {porPago.length>0 && (
             <Card className="p-4">
-              <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Cómo pagaron</div>
+              <div className="text-[11px] uppercase tracking-[0.15em] text-[var(--muted)] mb-2">Cómo pagaron</div>
               {porPago.map((x)=><Linea key={x.p} label={x.p} val={`${C(x.t)} · ${((x.t/total)*100).toFixed(0)}%`} />)}
             </Card>
           )}
 
           {porCat.length>0 && (
             <Card className="p-4">
-              <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">En qué se fue la plata</div>
+              <div className="text-[11px] uppercase tracking-[0.15em] text-[var(--muted)] mb-2">En qué se fue la plata</div>
               {porCat.map((x)=><Linea key={x.c} label={x.c} val={`${C(x.t)} · ${((x.t/salidas)*100).toFixed(0)}%`} />)}
             </Card>
           )}
 
           {porCli.length>0 && (
             <Card className="p-4">
-              <div className="text-[11px] uppercase tracking-[0.15em] text-stone-500 mb-2">Clientes del mes</div>
+              <div className="text-[11px] uppercase tracking-[0.15em] text-[var(--muted)] mb-2">Clientes del mes</div>
               {porCli.slice(0,15).map((x,i)=>(
-                <div key={i} className="flex justify-between py-1.5 border-b border-stone-100 last:border-0">
-                  <span className="text-sm">{x.veces>1 && <span className="text-stone-500 mr-1.5">★</span>}{x.nombre}</span>
+                <div key={i} className="flex justify-between py-1.5 border-b border-[var(--line)] last:border-0">
+                  <span className="text-sm">{x.veces>1 && <span className="text-[var(--muted)] mr-1.5">★</span>}{x.nombre}</span>
                   <span className="font-mono tabular-nums text-[12px]">{x.veces}× · {C(x.monto)}</span>
                 </div>
               ))}
-              <p className="text-[11px] text-stone-500 mt-2">★ compró más de una vez este mes.</p>
+              <p className="text-[11px] text-[var(--muted)] mt-2">★ compró más de una vez este mes.</p>
             </Card>
           )}
         </div>
@@ -4349,8 +4358,8 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, movs, cfg,
       </div>
 
       <div className="text-center pt-2 pb-4">
-        <div className="text-[11px] text-stone-500 mb-2">{correo}</div>
-        <button onClick={()=>window.FB.salir()} className="text-[12px] text-stone-600 underline">Cerrar sesión</button>
+        <div className="text-[11px] text-[var(--muted)] mb-2">{correo}</div>
+        <button onClick={()=>window.FB.salir()} className="text-[12px] text-[var(--muted)] underline">Cerrar sesión</button>
       </div>
 
       {ajustes && <AjustesModal cfg={cfg} guardar={guardar} onClose={()=>setAjustes(false)} />}
@@ -4386,40 +4395,40 @@ function EnlacesModal({ sinLista, precios, enlaces, guardar, borrar, onClose, av
     <Modal title="Enlazar productos" onClose={onClose}>
       <div className="grid grid-cols-2 gap-1.5 mb-3">
         {[["pendientes", `Pendientes (${sinLista.length})`],["hechos", `Enlazados (${enlaces.length})`]].map(([id,l])=>(
-          <button key={id} onClick={()=>setTab(id)} className={"py-2 rounded-md border text-[12px] " + (tab===id ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}>{l}</button>
+          <button key={id} onClick={()=>setTab(id)} className={"py-2 rounded-[8px] border text-[12px] " + (tab===id ? "bg-[var(--ink)] text-white border-[var(--ink)]" : "bg-white border-[var(--line-strong)]")}>{l}</button>
         ))}
       </div>
 
       {tab === "pendientes" ? (
         <>
-          <p className="text-[13px] text-stone-600 mb-3 leading-relaxed">
+          <p className="text-[13px] text-[var(--muted)] mb-3 leading-relaxed">
             Estos nombres aparecen en las ventas pero no calzan con ningún artículo de Precios. Elegí a cuál corresponde cada uno y queda aprendido para siempre.
           </p>
-          {sinLista.length === 0 && <p className="text-sm text-stone-500 text-center py-6">Todo está enlazado. ★</p>}
+          {sinLista.length === 0 && <p className="text-sm text-[var(--muted)] text-center py-6">Todo está enlazado. ★</p>}
           {sinLista.map((s)=>{
             const cands = candidatos(s.texto, precios, 3);
             return (
-              <div key={s.texto} className="border border-stone-300 rounded-lg p-3 mb-2">
+              <div key={s.texto} className="border border-[var(--line-strong)] rounded-[10px] p-3 mb-2">
                 <div className="flex justify-between items-baseline">
                   <span className="text-sm font-medium">{s.texto}</span>
-                  <span className="font-mono tabular-nums text-[11px] text-stone-500">{s.veces}× · {C(s.monto)}</span>
+                  <span className="font-mono tabular-nums text-[11px] text-[var(--muted)]">{s.veces}× · {C(s.monto)}</span>
                 </div>
                 <div className="mt-2 space-y-1">
                   {cands.map(({p, score})=>(
-                    <button key={p.id} onClick={()=>enlazar(s.texto, p.id)} className="w-full text-left px-2 py-1.5 rounded-md border border-stone-300 bg-stone-50 active:bg-stone-200 flex justify-between items-center">
+                    <button key={p.id} onClick={()=>enlazar(s.texto, p.id)} className="w-full text-left px-2 py-1.5 rounded-[8px] border border-[var(--line-strong)] bg-[var(--surface)] active:bg-[rgba(22,33,28,.12)] flex justify-between items-center">
                       <span className="text-[13px] truncate mr-2">{p.nombre}</span>
-                      <span className="font-mono text-[10px] text-stone-500 shrink-0">{score>=0.8 ? "★" : score>=0.5 ? "○" : "◐"} {(score*100).toFixed(0)}%</span>
+                      <span className="font-mono text-[10px] text-[var(--muted)] shrink-0">{score>=0.8 ? "★" : score>=0.5 ? "○" : "◐"} {(score*100).toFixed(0)}%</span>
                     </button>
                   ))}
                   <select
                     onChange={(e)=>e.target.value && enlazar(s.texto, e.target.value)}
                     defaultValue=""
-                    className="w-full px-2 py-1.5 border border-stone-300 rounded-md bg-white text-[13px]"
+                    className="w-full px-2 py-1.5 border border-[var(--line-strong)] rounded-[8px] bg-white text-[13px]"
                   >
                     <option value="">Buscar en toda la lista…</option>
                     {[...precios].sort(porNombre).map((p)=><option key={p.id} value={p.id}>{p.nombre || "(sin nombre)"}</option>)}
                   </select>
-                  <button onClick={()=>ignorar(s.texto)} className="w-full text-[11px] text-stone-500 underline py-1">
+                  <button onClick={()=>ignorar(s.texto)} className="w-full text-[11px] text-[var(--muted)] underline py-1">
                     No es alimento con costo (helado, servicio, otro)
                   </button>
                 </div>
@@ -4429,16 +4438,16 @@ function EnlacesModal({ sinLista, precios, enlaces, guardar, borrar, onClose, av
         </>
       ) : (
         <>
-          {enlaces.length === 0 && <p className="text-sm text-stone-500 text-center py-6">Todavía no hay enlaces guardados.</p>}
+          {enlaces.length === 0 && <p className="text-sm text-[var(--muted)] text-center py-6">Todavía no hay enlaces guardados.</p>}
           {enlaces.map((e)=>{
             const p = precios.find((x)=>x.id===e.productoId);
             return (
-              <div key={e.id} className="flex justify-between items-center py-2 border-b border-stone-100">
+              <div key={e.id} className="flex justify-between items-center py-2 border-b border-[var(--line)]">
                 <div className="min-w-0">
                   <div className="text-sm truncate">{e.texto}</div>
-                  <div className="text-[11px] text-stone-500 truncate">{e.ignorar ? "Sin costo asignado" : (p ? "→ " + p.nombre : "→ artículo borrado")}</div>
+                  <div className="text-[11px] text-[var(--muted)] truncate">{e.ignorar ? "Sin costo asignado" : (p ? "→ " + p.nombre : "→ artículo borrado")}</div>
                 </div>
-                <button onClick={()=>borrar("enlaces", e.id)} className="text-stone-400 text-lg ml-2">×</button>
+                <button onClick={()=>borrar("enlaces", e.id)} className="text-[var(--muted)] text-lg ml-2">×</button>
               </div>
             );
           })}
@@ -4449,18 +4458,18 @@ function EnlacesModal({ sinLista, precios, enlaces, guardar, borrar, onClose, av
 }
 
 const KPI = ({ k, v, sub, oscuro }) => (
-  <div className={"rounded-lg border p-3 lg:p-4 " + (oscuro ? "bg-stone-900 border-stone-900 text-stone-100" : "bg-white border-stone-300")}>
-    <div className={"text-[10px] uppercase tracking-wide " + (oscuro ? "text-stone-400" : "text-stone-500")}>{k}</div>
+  <div className={"rounded-[10px] border p-3 lg:p-4 " + (oscuro ? "bg-[var(--ink)] border-[var(--ink)] text-[#F2F3F0]" : "bg-white border-[var(--line)]")}>
+    <div className={"text-[10px] uppercase tracking-wide " + (oscuro ? "text-[rgba(242,243,240,.55)]" : "text-[var(--muted)]")}>{k}</div>
     <div className="font-mono tabular-nums text-xl lg:text-2xl font-semibold mt-0.5 leading-tight">{v}</div>
-    {sub && <div className={"text-[11px] mt-0.5 " + (oscuro ? "text-stone-400" : "text-stone-500")}>{sub}</div>}
+    {sub && <div className={"text-[11px] mt-0.5 " + (oscuro ? "text-[rgba(242,243,240,.55)]" : "text-[var(--muted)]")}>{sub}</div>}
   </div>
 );
 
 const B = ({ k, v, sub, grande }) => (
   <div>
-    <div className="text-[10px] uppercase tracking-wide text-stone-500">{k}</div>
+    <div className="text-[10px] uppercase tracking-wide text-[var(--muted)]">{k}</div>
     <div className={"font-mono tabular-nums " + (grande ? "text-xl font-semibold" : "text-base")}>{v}</div>
-    {sub && <div className="text-[11px] text-stone-500">{sub}</div>}
+    {sub && <div className="text-[11px] text-[var(--muted)]">{sub}</div>}
   </div>
 );
 
@@ -4471,7 +4480,7 @@ function AjustesModal({ cfg, guardar, onClose }) {
       <div className="mb-3"><Lbl>Meta de ventas del mes</Lbl><Inp inputMode="decimal" value={f.meta} onChange={(e)=>setF({...f, meta:num(e.target.value)})} className="font-mono" /></div>
       <div className="mb-3">
         <Lbl>Impuestos</Lbl>
-        <p className="text-[11px] text-stone-500 leading-relaxed">
+        <p className="text-[11px] text-[var(--muted)] leading-relaxed">
           Se calculan solos con los factores del régimen simplificado: renta 1% de cada compra, más IVA según la tarifa de la factura
           (2% si vino al 13%, 0,33% al 2%, 0,125% al 1%). La tarifa se elige al registrar cada compra y la reserva se aparta sola.
         </p>
@@ -4479,12 +4488,12 @@ function AjustesModal({ cfg, guardar, onClose }) {
       <div className="mb-3">
         <Lbl>Margen para ventas sin costo conocido (%)</Lbl>
         <Inp inputMode="decimal" value={f.margenNoIdent != null ? f.margenNoIdent : 18} onChange={(e)=>setF({...f, margenNoIdent:num(e.target.value)})} className="font-mono" />
-        <p className="text-[11px] text-stone-500 mt-1">Se usa solo mientras la venta no calce con la tabla de precios. Mejora solo conforme enlacés productos.</p>
+        <p className="text-[11px] text-[var(--muted)] mt-1">Se usa solo mientras la venta no calce con la tabla de precios. Mejora solo conforme enlacés productos.</p>
       </div>
       <div className="mb-3">
         <Lbl>Saldo del banco al empezar a usar la app</Lbl>
         <Inp inputMode="decimal" value={f.saldoBanco} onChange={(e)=>setF({...f, saldoBanco:num(e.target.value)})} className="font-mono" />
-        <p className="text-[11px] text-stone-500 mt-1">Lo que había en la cuenta antes del primer registro. Sobre eso se suman ventas y depósitos.</p>
+        <p className="text-[11px] text-[var(--muted)] mt-1">Lo que había en la cuenta antes del primer registro. Sobre eso se suman ventas y depósitos.</p>
       </div>
       <div className="mb-3">
         <Lbl>Cuándo cae en la cuenta lo de la tarjeta</Lbl>
@@ -4493,18 +4502,18 @@ function AjustesModal({ cfg, guardar, onClose }) {
             <button
               key={n}
               onClick={()=>setF({...f, diasTarjeta:n})}
-              className={"w-full text-left px-3 py-2 rounded-md border text-[13px] " + ((f.diasTarjeta||0)===n ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300")}
+              className={"w-full text-left px-3 py-2 rounded-[8px] border text-[13px] " + ((f.diasTarjeta||0)===n ? "bg-[var(--ink)] text-white border-[var(--ink)]" : "bg-white border-[var(--line-strong)]")}
             >
               {(f.diasTarjeta||0)===n ? "○ " : "— "}{l}
             </button>
           ))}
         </div>
-        <p className="text-[11px] text-stone-500 mt-1">Se usa al cuadrar el banco, para no comparar plata que todavía no llegó.</p>
+        <p className="text-[11px] text-[var(--muted)] mt-1">Se usa al cuadrar el banco, para no comparar plata que todavía no llegó.</p>
       </div>
       <div className="mb-3">
         <Lbl>Fondo fijo en billetes</Lbl>
         <Inp inputMode="decimal" value={f.fondoCaja} onChange={(e)=>setF({...f, fondoCaja:num(e.target.value)})} className="font-mono" />
-        <p className="text-[11px] text-stone-500 mt-1">Los billetes que siempre quedan en la caja. Las monedas van aparte y se anotan en cada cierre.</p>
+        <p className="text-[11px] text-[var(--muted)] mt-1">Los billetes que siempre quedan en la caja. Las monedas van aparte y se anotan en cada cierre.</p>
       </div>
       <div className="grid grid-cols-2 gap-3 mb-3">
         <div><Lbl>Margen meta granel (%)</Lbl><Inp inputMode="decimal" value={f.margenGranel} onChange={(e)=>setF({...f, margenGranel:num(e.target.value)})} className="font-mono" /></div>
@@ -4513,11 +4522,11 @@ function AjustesModal({ cfg, guardar, onClose }) {
       <div className="mb-3">
         <Lbl>Ganancia sobre el costo (%)</Lbl>
         <Inp inputMode="decimal" value={f.gananciaDef != null ? f.gananciaDef : 20} onChange={(e)=>setF({...f, gananciaDef:num(e.target.value)})} className="font-mono" />
-        <p className="text-[11px] text-stone-500 mt-1">Se aplica como costo × (1 + g/100), igual que en la hoja. Cada artículo puede llevar la suya propia en la tabla de Precios.</p>
+        <p className="text-[11px] text-[var(--muted)] mt-1">Se aplica como costo × (1 + g/100), igual que en la hoja. Cada artículo puede llevar la suya propia en la tabla de Precios.</p>
       </div>
       <div className="mb-3">
         <Lbl>Costo de los artículos</Lbl>
-        <p className="text-[11px] text-stone-500 mb-1.5 leading-relaxed">
+        <p className="text-[11px] text-[var(--muted)] mb-1.5 leading-relaxed">
           ◐ En régimen simplificado esto no se usa: el IVA de las compras no se acredita, así que el costo es siempre el total de la factura.
         </p>
         <div className="grid grid-cols-2 gap-1.5">
@@ -4528,7 +4537,7 @@ function AjustesModal({ cfg, guardar, onClose }) {
                 : "bg-white text-[var(--ink)] border-[var(--line-strong)]")}>{l}</button>
           ))}
         </div>
-        <p className="text-[11px] text-stone-500 mt-1.5 leading-relaxed">
+        <p className="text-[11px] text-[var(--muted)] mt-1.5 leading-relaxed">
           Criterio único para todas las facturas. Con "Sin IVA", el costo es el neto del XML y la app le quita el IVA al precio de venta antes de calcular el margen, para comparar lo mismo contra lo mismo. Cambiarlo acá no reescribe los costos ya guardados.
         </p>
       </div>
@@ -4539,7 +4548,7 @@ function AjustesModal({ cfg, guardar, onClose }) {
       <div className="mb-3">
         <Lbl>Inventario en bodega al empezar a contarlo</Lbl>
         <Inp inputMode="decimal" value={f.inventarioIni||0} onChange={(e)=>setF({...f, inventarioIni:num(e.target.value)})} className="font-mono" />
-        <p className="text-[11px] text-stone-500 mt-1">A precio de costo. Si lo dejás en cero, el contador arranca desde hoy y va a quedar corto unas semanas, hasta que se venda la mercadería vieja.</p>
+        <p className="text-[11px] text-[var(--muted)] mt-1">A precio de costo. Si lo dejás en cero, el contador arranca desde hoy y va a quedar corto unas semanas, hasta que se venda la mercadería vieja.</p>
       </div>
       <div className="grid grid-cols-2 gap-3 mb-3">
         <div>
@@ -4554,16 +4563,16 @@ function AjustesModal({ cfg, guardar, onClose }) {
       <div className="mb-3">
         <Lbl>Retiro mensual para la casa</Lbl>
         <Inp inputMode="decimal" value={f.retiroMensual || 0} onChange={(e)=>setF({...f, retiroMensual:num(e.target.value)})} className="font-mono" />
-        <p className="text-[11px] text-stone-500 mt-1">Lo que el negocio debería aportar cada mes: luz, agua, lo que sea. Poné una cifra modesta y sostenible; la app te dice mes a mes si alcanza. Dejalo en cero si no querés fijar meta.</p>
+        <p className="text-[11px] text-[var(--muted)] mt-1">Lo que el negocio debería aportar cada mes: luz, agua, lo que sea. Poné una cifra modesta y sostenible; la app te dice mes a mes si alcanza. Dejalo en cero si no querés fijar meta.</p>
       </div>
       <div className="mb-3">
         <Lbl>Colchón, en semanas de gastos fijos</Lbl>
         <Inp inputMode="decimal" value={f.semanasColchon != null ? f.semanasColchon : 4} onChange={(e)=>setF({...f, semanasColchon:num(e.target.value)})} className="font-mono" />
-        <p className="text-[11px] text-stone-500 mt-1">Plata que se deja quieta y no cuenta como ganancia retirable. Cuatro semanas es un mes de operación pagado por adelantado.</p>
+        <p className="text-[11px] text-[var(--muted)] mt-1">Plata que se deja quieta y no cuenta como ganancia retirable. Cuatro semanas es un mes de operación pagado por adelantado.</p>
       </div>
       <div className="mb-4">
         <Lbl>Proyección</Lbl>
-        <button onClick={()=>setF({...f, excluirDomingos: !f.excluirDomingos})} className="w-full px-3 py-2 border border-stone-300 rounded-md bg-stone-50 text-left text-sm">
+        <button onClick={()=>setF({...f, excluirDomingos: !f.excluirDomingos})} className="w-full px-3 py-2 border border-[var(--line-strong)] rounded-[8px] bg-[var(--surface)] text-left text-sm">
           {f.excluirDomingos ? "○" : "—"} Excluir domingos del cálculo
         </button>
       </div>
