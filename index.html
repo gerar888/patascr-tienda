@@ -193,6 +193,8 @@ const mesDe = (iso) => (iso || "").slice(0, 7);
 const fmtFecha = (iso) => { const [y,m,d] = (iso||"").split("-"); return `${+d}/${+m}/${y}`; };
 const nombreDia = (iso) => { const [y,m,d] = iso.split("-").map(Number); return new Date(y, m-1, d).toLocaleDateString("es-CR", { weekday: "long" }); };
 const titulo = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+/* ordena por nombre sin reventar si una fila quedó sin nombre (pegado mal alineado) */
+const porNombre = (a, b) => String((a && a.nombre) || "").localeCompare(String((b && b.nombre) || ""), "es");
 const diasDesde = (ms) => Math.floor((Date.now() - ms) / 86400000);
 const diasEntre = (a, b) => Math.round(Math.abs(new Date(a) - new Date(b)) / 86400000);
 const num = (v) => {
@@ -689,7 +691,7 @@ function BuscadorProducto({ precios, onElegir, onLibre, onCerrar }) {
   const res = useMemo(()=>{
     const t = norm(q);
     const lista = [...precios].filter((p)=>num(p.precioKilo) > 0 || num(p.precioSaco) > 0);
-    if (!t) return lista.sort((a,b)=>a.nombre.localeCompare(b.nombre)).slice(0, 8);
+    if (!t) return lista.sort(porNombre).slice(0, 8);
     return lista
       .map((p)=>{
         const n = norm(p.nombre);
@@ -3324,7 +3326,7 @@ function Precios({ precios, enlaces, gastos, cfg, guardar, borrar, aviso, usuari
     .filter((p)=>!q || norm(p.nombre).includes(norm(q)))
     .map(fila)
     .filter((f)=>!soloBajos || f.bajoKilo || f.bajoSaco || f.sinPrecio)
-    .sort((a,b)=>a.p.nombre.localeCompare(b.p.nombre)),
+    .sort((a,b)=>porNombre(a.p, b.p)),
   [precios, q, soloBajos, gDef, cfg]);
 
   const grabar = async (p, campos) => {
@@ -4415,7 +4417,7 @@ function EnlacesModal({ sinLista, precios, enlaces, guardar, borrar, onClose, av
                     className="w-full px-2 py-1.5 border border-stone-300 rounded-md bg-white text-[13px]"
                   >
                     <option value="">Buscar en toda la lista…</option>
-                    {[...precios].sort((a,b)=>a.nombre.localeCompare(b.nombre)).map((p)=><option key={p.id} value={p.id}>{p.nombre}</option>)}
+                    {[...precios].sort(porNombre).map((p)=><option key={p.id} value={p.id}>{p.nombre || "(sin nombre)"}</option>)}
                   </select>
                   <button onClick={()=>ignorar(s.texto)} className="w-full text-[11px] text-stone-500 underline py-1">
                     No es alimento con costo (helado, servicio, otro)
