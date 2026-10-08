@@ -2437,7 +2437,7 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
         <KPI k="Total del negocio" v={C(totalNegocio)} sub="caja + pendiente + banco" oscuro />
         <KPI k="En la caja" v={C(caja)} sub={monedas>0 ? `incluye ${C(monedas)} en monedas` : (ultimoCierre ? "desde el " + fmtFecha(ultimoCierre) : "sin cierres")} />
         <KPI k="Por depositar" v={C(pendienteReal)} sub={porDepositar > 0 ? "◐ fuera del banco" : descuadre > 0 ? `● ${C(descuadre)} de más registrados` : "○ al día"} />
-        <KPI k="En el banco" v={C(banco)} sub={tarjetaPend>0 ? `${C(tarjetaPend)} de tarjeta sin acreditar` : "SINPE, tarjeta y depósitos"} />
+        <KPI k="En el banco" v={C(banco)} sub={tarjetaPend>0 ? `◐ tu banco dirá ${C(bancoAcreditado)}` : "SINPE, tarjeta y depósitos"} />
       </div>
 
       {/* ================= DINERO DISPONIBLE HOY ================= */}
@@ -2905,6 +2905,27 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
                 <span>◐ De eso, sin acreditar</span><span className="font-mono tabular-nums">{C(tarjetaPend)}</span>
               </div>
             )}
+          </div>
+
+          {/* El único número que el banco puede confirmar. Va aparte y con peso
+             propio porque el de arriba incluye la tarjeta de hoy, que el banco
+             todavía no acreditó: compararlo contra la app del banco no cuadra nunca. */}
+          <div className="mt-2.5 rounded-[8px] border-2 border-[var(--ink)] px-3 py-2.5">
+            <div className="flex justify-between items-baseline gap-3">
+              <div className="min-w-0">
+                <div className="f-head text-[10px]">Tu banco debería decir hoy</div>
+                <div className="text-[11px] text-[var(--muted)] leading-snug mt-0.5">
+                  {tarjetaPend > 0
+                    ? `Sin los ${C(tarjetaPend)} de tarjeta de hoy, que entran mañana de madrugada.`
+                    : "No hay tarjeta pendiente, así que es el saldo completo."}
+                </div>
+              </div>
+              <span className="f-mono text-lg font-semibold whitespace-nowrap">{C(bancoAcreditado)}</span>
+            </div>
+            <button onClick={()=>setAjustar(true)}
+              className="f-head text-[10px] text-[var(--signal)] underline underline-offset-2 min-h-[44px] mt-0.5 text-left">
+              Si tu banco dice otra cosa, cuadrarlo
+            </button>
           </div>
         </div>
 
