@@ -235,6 +235,45 @@ const trimestreDe = (iso) => {
   const [y,m] = (iso||"").split("-").map(Number);
   return `${y}-T${Math.floor((m-1)/3)+1}`;
 };
+/* El pago casi siempre es del trimestre ANTERIOR: se declara dentro de los 15
+   días siguientes al cierre. Ese es el default al anotar una salida de impuestos. */
+const trimPrevio = (t) => {
+  const [y,q] = t.split("-T").map(Number);
+  return q === 1 ? `${y-1}-T4` : `${y}-T${q-1}`;
+};
+const trimsCercanos = (iso, n = 5) => {
+  let t = trimestreDe(iso), out = [t];
+  for (let i = 0; i < n; i++) { t = trimPrevio(t); out.push(t); }
+  return out;
+};
+const nomTrim = (t) => t.replace("-T", " · trimestre ");
+const mesPrevio = (m) => {
+  const [y,mm] = (m||"").split("-").map(Number);
+  return mm === 1 ? `${y-1}-12` : `${y}-${String(mm-1).padStart(2,"0")}`;
+};
+const mesLargo = (m) => {
+  const [y,mm] = (m||"").split("-").map(Number);
+  return titulo(new Date(y, mm-1, 1).toLocaleDateString("es-CR", { month:"long", year:"numeric" }));
+};
+/* Tope de compras: lo que se puede gastar en mercadería este mes sale de lo que
+   se vendió el mes pasado, no de lo que hay en el banco. El banco puede tener
+   plata que ya está comprometida. */
+const calcTope = (ventas, gastos, cfg, mes) => {
+  const pct = cfg && cfg.pctTope != null ? cfg.pctTope : 70;
+  const prev = mesPrevio(mes);
+  const ventasPrev = ventas.filter((v)=>mesDe(v.fecha) === prev).reduce((a,v)=>a+v.monto, 0);
+  const tope = ventasPrev * (pct/100);
+  const comprado = gastos
+    .filter((g)=>g.categoria === "Mercadería" && mesDe(g.fecha) === mes)
+    .reduce((a,g)=>a+g.monto, 0);
+  const usado = tope > 0 ? (comprado/tope)*100 : (comprado > 0 ? 100 : 0);
+  return {
+    pct, mes, mesPrev: prev, ventasPrev, tope, comprado,
+    disponible: tope - comprado, usado,
+    sev: usado >= 100 ? "●" : usado >= 70 ? "◐" : "○",
+    sinBase: ventasPrev <= 0,
+  };
+};
 const venceTrimestre = (t) => {
   const [y,q] = t.split("-T").map(Number);
   const mesFin = q*3;                       /* declara dentro de los 15 días siguientes */
@@ -253,9 +292,12 @@ const porVencer = (lista) => lista.filter((g)=>g.credito && !g.pagado)
   .map((g)=>({ ...g, dias: g.vence ? Math.round((new Date(g.vence+"T12:00") - new Date(hoyISO()+"T12:00"))/86400000) : null }))
   .sort((a,b)=>(a.vence||"9999") < (b.vence||"9999") ? -1 : 1);
 
-const CATS = ["Mercadería", "Empaque", "Alquiler", "Servicios", "Transporte", "Marketing", "Impuestos", "Otro"];
+const CATS = ["Mercadería", "Empaque", "Alquiler", "Servicios", "Transporte", "Marketing", "Impuestos", "Retiro socios", "Otro"];
+/* Sacar plata para la casa no es un gasto del negocio: no entra en el tope de
+   compras, no es gasto fijo y no baja la ganancia. Solo baja la plata. */
+const ES_RETIRO = (g) => g.categoria === "Retiro socios";
 const PAGOS = ["Efectivo", "SINPE", "Tarjeta", "Otro"];
-const CFG_DEF = { id: "general", meta: 140000, costoPct: 80, excluirDomingos: true, margenGranel: 20, margenSaco: 15, fondoCaja: 20000, saldoBanco: 0, diasTarjeta: 1, inventarioIni: 0, semanasColchon: 4, colchonPctMin: 10, socios: 2, retiroMensual: 0, costoSinIVA: true, tarifaIVA: 13, gananciaDef: 20, regimen: "simplificado", impuestoCompras: 0, margenNoIdent: 18 };
+const CFG_DEF = { id: "general", meta: 140000, costoPct: 80, excluirDomingos: true, margenGranel: 20, margenSaco: 15, fondoCaja: 20000, saldoBanco: 0, diasTarjeta: 1, inventarioIni: 0, semanasColchon: 4, colchonPctMin: 10, socios: 2, retiroMensual: 0, costoSinIVA: true, tarifaIVA: 13, gananciaDef: 20, regimen: "simplificado", impuestoCompras: 0, margenNoIdent: 18, pctTope: 70, margenCierre: 22 };
 
 /* ---------- convención única de IVA ----------
    Los costos se guardan SIN IVA (así vienen en el XML y así se acreditan).
@@ -384,6 +426,48 @@ const Linea = ({ label, val, fuerte }) => (
 const Chip = ({ children, onClick, activo, className = "" }) => (
   <button onClick={onClick} className={"f-head tap-44 text-[11px] px-3.5 rounded-full border " + (activo ? "bg-[var(--ink)] text-[#F2F3F0] border-[var(--ink)] " : "bg-white text-[var(--ink)] border-[var(--line-strong)] active:bg-[rgba(22,33,28,.07)] ") + className}>{children}</button>
 );
+/* Tarjeta del tope de compras. Misma pieza en Dinero y en Registrar: el número
+   tiene que ser el mismo donde se consulta y donde se compra. */
+const TopeCompras = ({ t, compacta }) => {
+  const barra = Math.min(100, Math.max(0, t.usado));
+  if (t.sinBase) return (
+    <Card className={compacta ? "p-3" : "p-4"}>
+      <div className="f-head text-[11px] mb-1">Tope de compras · {mesLargo(t.mes)}</div>
+      <p className="text-[12px] text-[var(--muted)] leading-relaxed">
+        Sin ventas registradas en {mesLargo(t.mesPrev)} todavía, así que no hay con qué calcular el tope de este mes.
+      </p>
+    </Card>
+  );
+  return (
+    <Card nivel={t.usado >= 100 ? "atencion" : "normal"} className={compacta ? "p-3" : "p-4"}>
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="f-head text-[11px]">Tope de compras · {mesLargo(t.mes)}</span>
+        <span className="f-mono text-[12px] text-[var(--muted)]">{t.sev} {t.usado.toFixed(0)}% usado</span>
+      </div>
+      <div className="mt-2 mb-1">
+        <div className="text-[11px] text-[var(--muted)]">{t.disponible >= 0 ? "Queda por comprar" : "Pasado del tope"}</div>
+        <div className="f-mono text-[26px] leading-none font-semibold tracking-[-.02em] my-1">
+          {t.disponible < 0 ? "− " : ""}{C(Math.abs(Math.round(t.disponible)))}
+        </div>
+      </div>
+      <div className="h-2 rounded-full overflow-hidden border border-[var(--line-strong)] bg-[rgba(22,33,28,.10)]">
+        <div className={"h-full " + (t.usado >= 100 ? "bg-[var(--attention)]" : "bg-[var(--ink)]")}
+          style={{ width: barra + "%" }} />
+      </div>
+      <div className="mt-2 space-y-0.5">
+        <Linea label="Tope del mes" val={C(Math.round(t.tope))} />
+        <Linea label="Comprado en mercadería" val={"− " + C(Math.round(t.comprado))} />
+        <Linea label={t.disponible >= 0 ? "Disponible" : "Pasado del tope"}
+          val={(t.disponible < 0 ? "− " : "") + C(Math.abs(Math.round(t.disponible)))} fuerte />
+      </div>
+      <p className="text-[11px] text-[var(--muted)] mt-2 leading-relaxed">
+        Ventas de {mesLargo(t.mesPrev)}: {C(Math.round(t.ventasPrev))} × {t.pct}%.
+        {t.usado >= 100 && " Pasarse no está prohibido, pero cada colón de más sale del capital de trabajo."}
+      </p>
+    </Card>
+  );
+};
+
 const Modal = ({ title, onClose, children }) => (
   <div className="fixed inset-0 z-50 bg-[rgba(14,22,20,.55)] flex items-end sm:items-center justify-center" onClick={onClose}>
     <div className="bg-white w-full sm:max-w-lg rounded-t-[14px] sm:rounded-[12px] max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
@@ -661,7 +745,7 @@ function Registrar({ ventas, gastos, fijos, precios, enlaces, cierres, cfg, guar
       <div className="lg:max-w-2xl">
       {modo === "venta"
         ? <VentaForm ventas={ventas} gastos={gastos} precios={precios} enlaces={enlaces} cierres={cierres} cfg={cfg} guardar={guardar} aviso={aviso} usuario={usuario} />
-        : <GastoForm gastos={gastos} fijos={fijos} precios={precios} enlaces={enlaces} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={usuario} />}
+        : <GastoForm ventas={ventas} gastos={gastos} fijos={fijos} precios={precios} enlaces={enlaces} cfg={cfg} guardar={guardar} borrar={borrar} aviso={aviso} usuario={usuario} />}
       </div>
     </div>
   );
@@ -1412,7 +1496,7 @@ function CierreModal({ fecha, ventas, gastos, cierres, cfg, guardar, usuario, av
 }
 
 /* ================= GASTOS ================= *//* ================= GASTOS ================= */
-function GastoForm({ gastos, fijos, precios, enlaces, cfg, guardar, borrar, aviso, usuario }) {
+function GastoForm({ ventas, gastos, fijos, precios, enlaces, cfg, guardar, borrar, aviso, usuario }) {
   const [fecha, setFecha] = useState(hoyISO());
   const [cat, setCat] = useState("Mercadería");
   const [detalle, setDetalle] = useState("");
@@ -1422,6 +1506,17 @@ function GastoForm({ gastos, fijos, precios, enlaces, cfg, guardar, borrar, avis
   const [credito, setCredito] = useState(false);
   const [vence, setVence] = useState("");
   const [tarifa, setTarifa] = useState("13");
+  /* qué trimestre se está declarando, y si ese pago lo deja saldado */
+  const [trimPago, setTrimPago] = useState(null);
+  const [cerrarTrim, setCerrarTrim] = useState(true);
+  const [avisoTope, setAvisoTope] = useState(null);   /* {exceso} mientras se confirma */
+
+  const tope = useMemo(()=>calcTope(ventas||[], gastos||[], cfg, mesDe(fecha)), [ventas, gastos, cfg, fecha]);
+
+  /* el default es el trimestre anterior al de la fecha de pago: la declaración
+     se presenta dentro de los 15 días siguientes al cierre del trimestre */
+  const trimSugerido = useMemo(()=>trimPrevio(trimestreDe(fecha)), [fecha]);
+  const trimElegido = trimPago || trimSugerido;
 
   /* por defecto, 30 días desde la fecha de la factura */
   const venceSugerido = useMemo(()=>{
@@ -1432,15 +1527,24 @@ function GastoForm({ gastos, fijos, precios, enlaces, cfg, guardar, borrar, avis
   const provPrev = useMemo(()=>[...new Set(gastos.map((g)=>g.detalle).filter(Boolean))].sort(), [gastos]);
   const delDia = gastos.filter((g)=>g.fecha === fecha);
 
-  const registrar = async () => {
+  const registrar = async (contraPedido) => {
     const m = num(monto);
+    /* No se bloquea la compra: se avisa y se deja constancia de por qué se pasó. */
+    if (cat === "Mercadería" && avisoTope === null && !tope.sinBase && (tope.disponible - m) < 0) {
+      setAvisoTope({ exceso: m - Math.max(0, tope.disponible) });
+      return;
+    }
     const doc = { id: UID(), creado: Date.now(), fecha, categoria: cat, detalle: detalle.trim(), monto: m, pago, usuario };
+    if (contraPedido) doc.contraPedido = true;
+    if (avisoTope) doc.sobreTope = Math.round(avisoTope.exceso);
     if (cat === "Mercadería" || cat === "Empaque") doc.tarifa = tarifa;
-    if (cat === "Impuestos") doc.trimestre = trimestreDe(fecha);
+    if (cat === "Impuestos") { doc.trimestre = trimElegido; doc.cerrado = cerrarTrim; }
     if (credito) { doc.credito = true; doc.pagado = false; doc.vence = vence || venceSugerido; }
     await guardar("gastos", doc);
-    setDetalle(""); setMonto(""); setVence("");
-    aviso("Salida guardada · " + C(m));
+    setDetalle(""); setMonto(""); setVence(""); setTrimPago(null); setCerrarTrim(true); setAvisoTope(null);
+    aviso(cat === "Impuestos"
+      ? `Impuestos de ${nomTrim(trimElegido)} · ${C(m)}`
+      : "Salida guardada · " + C(m));
   };
 
   return (
@@ -1456,6 +1560,37 @@ function GastoForm({ gastos, fijos, precios, enlaces, cfg, guardar, borrar, avis
             <button key={c} onClick={()=>setCat(c)} className={"px-2.5 py-1.5 rounded-full border text-[12px] " + (cat===c ? "bg-[var(--ink)] text-white border-[var(--ink)]" : "bg-white border-[var(--line-strong)]")}>{c}</button>
           ))}
         </div>
+        {cat === "Mercadería" && !tope.sinBase && (
+          <div className="mb-3"><TopeCompras t={tope} compacta /></div>
+        )}
+        {cat === "Impuestos" && (
+          <div className="mb-3">
+            <Lbl>Qué trimestre estás declarando</Lbl>
+            <div className="flex flex-wrap gap-1.5">
+              {trimsCercanos(fecha, 4).map((t)=>(
+                <button key={t} onClick={()=>setTrimPago(t)} aria-pressed={trimElegido===t}
+                  className={"f-mono text-[12px] min-h-[44px] px-3 rounded-[8px] border " + (trimElegido===t
+                    ? "bg-[var(--ink)] text-[#F2F3F0] border-[var(--ink)]"
+                    : "bg-white text-[var(--ink)] border-[var(--line-strong)]")}>{t}</button>
+              ))}
+            </div>
+            <p className="text-[12px] text-[var(--muted)] mt-1.5 leading-relaxed">
+              No es el mes en que pagás, es el trimestre que estás declarando. Por eso viene marcado el anterior.
+            </p>
+            <button onClick={()=>setCerrarTrim(!cerrarTrim)} aria-pressed={cerrarTrim}
+              className="w-full text-left mt-2 px-3 py-2.5 rounded-[8px] border border-[var(--line-strong)] bg-white min-h-[48px]">
+              <span className="text-[13px]">
+                <span className="mr-1.5">{cerrarTrim ? "○" : "◐"}</span>
+                Con esto queda saldado {nomTrim(trimElegido)}
+              </span>
+              <span className="block text-[11px] text-[var(--muted)] leading-snug mt-0.5">
+                {cerrarTrim
+                  ? "Lo que Hacienda cobró es el monto final. Si yo había calculado de más, esa diferencia deja de aparecer como pendiente."
+                  : "Es un abono: el resto sigue contando como pendiente de ese trimestre."}
+              </span>
+            </button>
+          </div>
+        )}
         {(cat === "Mercadería" || cat === "Empaque") && (
           <div className="mb-3">
             <Lbl>IVA con que vino la factura</Lbl>
@@ -1511,7 +1646,7 @@ function GastoForm({ gastos, fijos, precios, enlaces, cfg, guardar, borrar, avis
           </React.Fragment>
         )}
 
-        <Btn kind="warn" className="w-full py-3 text-base" disabled={!monto} onClick={registrar}>
+        <Btn kind="warn" className="w-full py-3 text-base" disabled={!monto} onClick={()=>registrar(false)}>
           {credito ? "Anotar factura a crédito" : "Guardar salida"}
         </Btn>
 
@@ -1543,6 +1678,26 @@ function GastoForm({ gastos, fijos, precios, enlaces, cfg, guardar, borrar, avis
       )}
 
       {verFijos && <FijosModal fijos={fijos} gastos={gastos} guardar={guardar} borrar={borrar} onClose={()=>setVerFijos(false)} aviso={aviso} />}
+
+      {avisoTope && (
+        <Modal title="Esta compra pasa el tope" onClose={()=>setAvisoTope(null)}>
+          <div className="p-4">
+            <p className="text-[15px] leading-relaxed mb-1">
+              Esta compra pasa el tope del mes por <span className="f-mono font-semibold">{C(Math.round(avisoTope.exceso))}</span>.
+            </p>
+            <p className="text-[13px] text-[var(--muted)] leading-relaxed mb-3">
+              El tope de {mesLargo(tope.mes)} es {C(Math.round(tope.tope))} y ya se compraron {C(Math.round(tope.comprado))}.
+              Si es mercadería que un cliente ya pidió, no es sobrestock y conviene dejarlo anotado.
+            </p>
+            <p className="f-head text-[11px] text-[var(--muted)] mb-2">¿Es contra pedido de un cliente?</p>
+            <div className="space-y-2">
+              <Btn kind="signal" className="w-full commit" onClick={()=>registrar(true)}>Sí, contra pedido</Btn>
+              <Btn kind="attention" className="w-full" onClick={()=>registrar(false)}>Guardar igual</Btn>
+              <Btn kind="ghost" className="w-full" onClick={()=>setAvisoTope(null)}>Cancelar</Btn>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -2231,12 +2386,23 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
       porTrim[t].total += imp;
     });
     gastos.filter((g)=>g.categoria === "Impuestos").forEach((g)=>{
-      const t = g.trimestre || trimestreDe(g.fecha);
+      /* el trimestre que se declara, no el mes en que se pagó */
+      const t = g.trimestre || trimPrevio(trimestreDe(g.fecha));
       if (!porTrim[t]) porTrim[t] = { trim: t, base: 0, renta: 0, iva: 0, total: 0, pagado: 0 };
       porTrim[t].pagado += g.monto;
+      porTrim[t].pagos = (porTrim[t].pagos || []).concat(g);
+      /* Hacienda cobró lo que cobró: si el pago salda el trimestre, lo que yo
+         había calculado de más deja de arrastrarse como pendiente. */
+      if (g.cerrado !== false) porTrim[t].cerrado = true;
     });
     return Object.values(porTrim)
-      .map((x)=>({ ...x, falta: Math.max(0, x.total - x.pagado), vence: venceTrimestre(x.trim) }))
+      .map((x)=>({
+        ...x,
+        pagos: x.pagos || [],
+        falta: x.cerrado ? 0 : Math.max(0, x.total - x.pagado),
+        dif: x.pagado > 0 ? x.pagado - x.total : 0,
+        vence: venceTrimestre(x.trim),
+      }))
       .sort((a,b)=>a.trim < b.trim ? -1 : 1);
   }, [gastos]);
 
@@ -2288,8 +2454,9 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
   const merca = gMes.filter((g)=>g.categoria==="Mercadería").reduce((a,g)=>a+g.monto,0);
   const fijosMes = gMes.filter((g)=>g.fijoId).reduce((a,g)=>a+g.monto,0);
   const impMes = gMes.filter((g)=>g.categoria==="Impuestos" && !g.fijoId).reduce((a,g)=>a+g.monto,0);
-  const otrosMes = gMes.filter((g)=>g.categoria!=="Mercadería" && g.categoria!=="Impuestos" && !g.fijoId).reduce((a,g)=>a+g.monto,0);
-  const gastosMesTot = merca + fijosMes + otrosMes + impMes;
+  const retiroMes = gMes.filter((g)=>ES_RETIRO(g) && !g.fijoId).reduce((a,g)=>a+g.monto,0);
+  const otrosMes = gMes.filter((g)=>g.categoria!=="Mercadería" && g.categoria!=="Impuestos" && !ES_RETIRO(g) && !g.fijoId).reduce((a,g)=>a+g.monto,0);
+  const gastosMesTot = merca + fijosMes + otrosMes + impMes + retiroMes;
 
   /* la plata de meses posteriores no cuenta para reconstruir el saldo inicial */
   const posterior = ventas.filter((v)=>mesDe(v.fecha)>mes).reduce((a,v)=>a+v.monto,0)
@@ -2306,6 +2473,7 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
     { label: "Otros|gastos", valor: otrosMes, tipo: "baja" },
   ];
   if (impMes > 0) pasos.push({ label: "Impuestos|pagados", valor: impMes, tipo: "baja" });
+  if (retiroMes > 0) pasos.push({ label: "Retiro|socios", valor: retiroMes, tipo: "baja" });
   if (Math.abs(ajMes) > 0.5) pasos.push({ label: "Ajustes|del banco", valor: Math.abs(ajMes), tipo: ajMes>0 ? "sube" : "baja" });
   pasos.push({ label: "Con lo que|se quedó", valor: saldoFin, tipo: "total" });
 
@@ -2366,9 +2534,13 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
   const libre = totalNegocio - comprometido;
   /* Lo retirable es el menor entre la plata libre y la ganancia que todavía no se ha sacado.
      Retirar por encima de la ganancia es sacar capital de trabajo. */
+  /* Se puede sacar plata de dos maneras: como movimiento de socio o anotada como
+     salida "Retiro socios". El techo tiene que ver las dos o se retira dos veces. */
   const retiradoMes = movs
     .filter((m)=>m.metodo === "retiro" && mesDe(m.fecha) === mesDe(hoyISO()))
-    .reduce((a,m)=>a + Math.abs(m.monto), 0);
+    .reduce((a,m)=>a + Math.abs(m.monto), 0)
+    + gastos.filter((g)=>ES_RETIRO(g) && mesDe(g.fecha) === mesDe(hoyISO()))
+        .reduce((a,g)=>a + g.monto, 0);
   const techoGanancia = Math.max(0, gananciaMes - retiradoMes);
   const retirable = Math.max(0, Math.min(libre, techoGanancia));
   const limita = libre < techoGanancia ? "plata" : "ganancia";
@@ -2437,7 +2609,7 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
         <KPI k="Total del negocio" v={C(totalNegocio)} sub="caja + pendiente + banco" oscuro />
         <KPI k="En la caja" v={C(caja)} sub={monedas>0 ? `incluye ${C(monedas)} en monedas` : (ultimoCierre ? "desde el " + fmtFecha(ultimoCierre) : "sin cierres")} />
         <KPI k="Por depositar" v={C(pendienteReal)} sub={porDepositar > 0 ? "◐ fuera del banco" : descuadre > 0 ? `● ${C(descuadre)} de más registrados` : "○ al día"} />
-        <KPI k="En el banco" v={C(banco)} sub={tarjetaPend>0 ? `${C(tarjetaPend)} de tarjeta sin acreditar` : "SINPE, tarjeta y depósitos"} />
+        <KPI k="En el banco" v={C(banco)} sub={tarjetaPend>0 ? `◐ tu banco dirá ${C(bancoAcreditado)}` : "SINPE, tarjeta y depósitos"} />
       </div>
 
       {/* ================= DINERO DISPONIBLE HOY ================= */}
@@ -2518,6 +2690,8 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
         </p>
       </Card>
 
+      <TopeCompras t={calcTope(ventas, gastos, cfg, mesDe(hoyISO()))} />
+
       {deudas.length > 0 && (
         <Card nivel="atencion" className="p-4">
           <div className="flex items-baseline justify-between gap-3 mb-1">
@@ -2593,6 +2767,40 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
                   compras {C(x.base)} · renta {C(x.renta)} + IVA {C(x.iva)}
                   {x.falta > 0 && ` · declara antes del ${fmtFecha(x.vence)}`}
                 </div>
+
+                {/* Pagos anotados contra este trimestre. El trimestre se puede
+                   corregir aquí: anotarlo en el mes equivocado es el error fácil. */}
+                {x.pagos.map((g)=>(
+                  <div key={g.id} className="mt-1.5 pl-3 border-l-2 border-[var(--line-strong)]">
+                    <div className="flex items-baseline justify-between gap-2 text-[12px]">
+                      <span className="text-[var(--muted)] truncate">
+                        Pagado el {fmtFecha(g.fecha)}{g.detalle ? ` · ${g.detalle}` : ""}
+                      </span>
+                      <span className="f-mono whitespace-nowrap">− {C(g.monto)}</span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                      <select value={g.trimestre || x.trim}
+                        onChange={(e)=>guardar("gastos", { ...g, trimestre: e.target.value })}
+                        className="f-mono text-[11px] min-h-[44px] px-2 rounded-[8px] border border-[var(--line-strong)] bg-white">
+                        {[...new Set(trimsCercanos(hoyISO(), 7).concat(g.trimestre || x.trim))]
+                          .sort().reverse()
+                          .map((t)=><option key={t} value={t}>{t}</option>)}
+                      </select>
+                      <button onClick={()=>guardar("gastos", { ...g, cerrado: g.cerrado === false })}
+                        className="f-head text-[10px] min-h-[44px] px-2.5 rounded-[8px] border border-[var(--line-strong)] bg-white">
+                        {g.cerrado === false ? "◐ es un abono" : "○ saldó el trimestre"}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+                {x.dif !== 0 && x.cerrado && (
+                  <p className="text-[11px] text-[var(--muted)] mt-1.5 leading-relaxed">
+                    {x.dif < 0
+                      ? `Hacienda cobró ${C(-x.dif)} menos de lo que la app había calculado. El trimestre queda saldado y esa diferencia ya no se arrastra.`
+                      : `Se pagó ${C(x.dif)} más de lo calculado. Vale la pena revisar si faltaban compras por anotar en ese trimestre.`}
+                  </p>
+                )}
               </div>
             );
           })}
@@ -2607,7 +2815,7 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
 
           <p className="text-[11px] text-[var(--muted)] mt-2 leading-relaxed border-t border-[var(--line)] pt-2">
             Factores: renta 1% de toda compra, más IVA según la tarifa de la factura — 2% si vino al 13%, 0,33% al 2%, 0,125% al 1%.
-            Cuando pagués la declaración, anotala como salida con categoría <span className="font-medium">Impuestos</span> y se descuenta sola.
+            Cuando pagués la declaración, anotala como salida con categoría <span className="font-medium">Impuestos</span> y escogé ahí el trimestre que estás declarando, que casi nunca es el mes en que pagás. Si te cobraron menos de lo calculado, el trimestre queda saldado igual.
           </p>
         </Card>
       )}
@@ -2905,6 +3113,27 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
                 <span>◐ De eso, sin acreditar</span><span className="font-mono tabular-nums">{C(tarjetaPend)}</span>
               </div>
             )}
+          </div>
+
+          {/* El único número que el banco puede confirmar. Va aparte y con peso
+             propio porque el de arriba incluye la tarjeta de hoy, que el banco
+             todavía no acreditó: compararlo contra la app del banco no cuadra nunca. */}
+          <div className="mt-2.5 rounded-[8px] border-2 border-[var(--ink)] px-3 py-2.5">
+            <div className="flex justify-between items-baseline gap-3">
+              <div className="min-w-0">
+                <div className="f-head text-[10px]">Tu banco debería decir hoy</div>
+                <div className="text-[11px] text-[var(--muted)] leading-snug mt-0.5">
+                  {tarjetaPend > 0
+                    ? `Sin los ${C(tarjetaPend)} de tarjeta de hoy, que entran mañana de madrugada.`
+                    : "No hay tarjeta pendiente, así que es el saldo completo."}
+                </div>
+              </div>
+              <span className="f-mono text-lg font-semibold whitespace-nowrap">{C(bancoAcreditado)}</span>
+            </div>
+            <button onClick={()=>setAjustar(true)}
+              className="f-head text-[10px] text-[var(--signal)] underline underline-offset-2 min-h-[44px] mt-0.5 text-left">
+              Si tu banco dice otra cosa, cuadrarlo
+            </button>
           </div>
         </div>
 
@@ -4039,6 +4268,41 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, movs, cfg,
   const margenBruto = G.margen;
   const gananciaNeta = gananciaBruta - fijosPagados;
 
+  /* ---------- cierre del mes ----------
+     Regla simple y fija, a propósito: el retiro sale de un margen sobre las
+     ventas, no de lo que haya en el banco, que casi siempre tiene plata ya
+     comprometida. Lo que queda es para reponer la bodega. */
+  const margenC = cfg.margenCierre != null ? cfg.margenCierre : 22;
+  const sociosC = Math.max(1, cfg.socios || 2);
+  const fijosMens = (fijos||[]).reduce((a,f)=>a+f.monto, 0);
+  /* El impuesto que devengaron las compras de ESTE mes. No se paga ahora —se
+     declara al cierre del trimestre— pero ya se debe, así que no se reparte. */
+  const impMesC = gastos.filter((g)=>mesDe(g.fecha)===mes).reduce((a,g)=>a+impuestoDe(g), 0);
+  const retiroBruto = total * (margenC/100);
+  const compromisos = fijosMens + impMesC;
+  const retiroMesC = Math.max(0, retiroBruto - compromisos);
+  const alcanza = retiroBruto >= compromisos;
+  const reponer = total * (1 - margenC/100);
+  const topeSig = total * ((cfg.pctTope != null ? cfg.pctTope : 70)/100);
+  const mesSig = (()=>{ const [y,m] = mes.split("-").map(Number); return m===12 ? `${y+1}-01` : `${y}-${String(m+1).padStart(2,"0")}`; })();
+  const yaRetirado = movs.filter((m)=>m.metodo==="retiro" && mesDe(m.fecha)===mes).reduce((a,m)=>a+Math.abs(m.monto),0)
+    + gastos.filter((g)=>ES_RETIRO(g) && mesDe(g.fecha)===mes).reduce((a,g)=>a+g.monto,0);
+
+  const registrarRetiro = async () => {
+    const porSocio = Math.floor(retiroMesC / sociosC);
+    if (porSocio <= 0) return;
+    for (let i = 0; i < sociosC; i++) {
+      await guardar("movimientos", {
+        id: UID(), creado: Date.now() + i, fecha: hoyISO(),
+        tipo: "ajuste", metodo: "retiro",
+        monto: -porSocio,
+        nota: `Retiro de cierre · ${mesLargo(mes)} · socio ${i+1} de ${sociosC}`,
+        usuario: correo,
+      });
+    }
+    aviso(`${sociosC} retiros de ${C(porSocio)} registrados`);
+  };
+
   const totalFijos = fijos.reduce((a,f)=>a+f.monto,0);
   const equilibrio = margenBruto>0 ? totalFijos/(margenBruto/100) : 0;
 
@@ -4179,6 +4443,55 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, movs, cfg,
             {gananciaNeta >= 0 ? "Esto es lo que el negocio generó de verdad este mes." : "El mes va en pérdida: la ganancia no alcanzó para cubrir los fijos."}
           </div>
         </div>
+      </Card>
+
+      {/* ---------- CIERRE DEL MES ---------- */}
+      <Card nivel="principal" className="p-4">
+        <div className="flex items-baseline justify-between gap-3 mb-3">
+          <span className="f-head text-[11px]">Cierre de {mesLargo(mes)}</span>
+          {yaRetirado > 0 && <span className="f-mono text-[11px] text-[var(--muted)]">ya se sacaron {C(Math.round(yaRetirado))}</span>}
+        </div>
+
+        <div className="mb-3">
+          <div className="text-[11px] text-[var(--muted)]">Para retirar entre {sociosC === 2 ? "los dos" : `los ${sociosC}`}</div>
+          <div className="f-mono text-[34px] leading-none font-semibold tracking-[-.02em] my-1">
+            {alcanza ? "" : "● "}{C(Math.round(retiroMesC))}
+          </div>
+          {retiroMesC > 0 && (
+            <div className="text-[13px] text-[var(--muted)]">
+              <span className="f-mono text-[var(--ink)]">{C(Math.floor(retiroMesC/sociosC))}</span> para cada uno
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-0.5 border-t border-[var(--line)] pt-3">
+          <Linea label={`Ventas de ${mesLargo(mes)}`} val={C(Math.round(total))} />
+          <Linea label={`Margen del ${margenC}%`} val={C(Math.round(retiroBruto))} />
+          <Linea label="Menos gastos fijos del mes" val={"− " + C(Math.round(fijosMens))} />
+          {impMesC > 0 && <Linea label="Menos impuesto de las compras del mes" val={"− " + C(Math.round(impMesC))} />}
+          <Linea label="Queda para retirar" val={C(Math.round(retiroMesC))} fuerte />
+        </div>
+
+        <p className="text-[12px] text-[var(--muted)] mt-2.5 leading-relaxed">
+          {!alcanza
+            ? `● El ${margenC}% de las ventas (${C(Math.round(retiroBruto))}) no alcanza a cubrir los ${C(Math.round(compromisos))} que el mes ya debe: ${C(Math.round(fijosMens))} de gastos fijos${impMesC > 0 ? ` y ${C(Math.round(impMesC))} de impuesto sobre las compras` : ""}. Este mes no hay retiro: lo que falta sale del capital de trabajo.`
+            : `${impMesC > 0 ? `Los ${C(Math.round(impMesC))} de impuesto ya están descontados aunque se declaren hasta el cierre del trimestre. ` : ""}Esto es la meta según la regla del margen. Antes de sacarlo, mirá en Dinero si la plata está hoy: ahí se descuentan además las facturas a crédito y el colchón.`}
+        </p>
+
+        {retiroMesC > 0 && (
+          <Btn kind="signal" className="w-full commit mt-3" onClick={registrarRetiro}>
+            Registrar retiro · {sociosC} de {C(Math.floor(retiroMesC/sociosC))}
+          </Btn>
+        )}
+
+        <div className="border-t border-[var(--line)] mt-3 pt-3 space-y-0.5">
+          <Linea label="Plata para reponer inventario" val={C(Math.round(reponer))} fuerte />
+          <Linea label={`Tope de compras de ${mesLargo(mesSig)}`} val={C(Math.round(topeSig))} />
+        </div>
+        <p className="text-[11px] text-[var(--muted)] mt-2 leading-relaxed">
+          Los {C(Math.round(reponer))} de reposición no se tocan: es la comida que ya se vendió y hay que volver a comprar.
+          El tope del mes entrante sale de estas mismas ventas.
+        </p>
       </Card>
 
       {/* ---------- 2. CONFIANZA DEL CÁLCULO ---------- */}
@@ -4479,6 +4792,18 @@ function AjustesModal({ cfg, guardar, onClose }) {
     <Modal title="Ajustes" onClose={onClose}>
       <div className="mb-3"><Lbl>Meta de ventas del mes</Lbl><Inp inputMode="decimal" value={f.meta} onChange={(e)=>setF({...f, meta:num(e.target.value)})} className="font-mono" /></div>
       <div className="mb-3">
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <div>
+            <Lbl>Tope de compras (% de las ventas del mes pasado)</Lbl>
+            <Inp inputMode="decimal" value={f.pctTope != null ? f.pctTope : 70} onChange={(e)=>setF({...f, pctTope:num(e.target.value)})} className="font-mono" />
+          </div>
+          <div>
+            <Lbl>Margen del cierre (% para retirar)</Lbl>
+            <Inp inputMode="decimal" value={f.margenCierre != null ? f.margenCierre : 22} onChange={(e)=>setF({...f, margenCierre:num(e.target.value)})} className="font-mono" />
+          </div>
+        </div>
+        <p className="text-[11px] text-[var(--muted)] -mt-2 mb-3">El tope dice cuánto se puede comprar este mes. El margen del cierre dice qué parte de las ventas es para ustedes; el resto es reposición. Los gastos fijos se editan en Registrar → Gastos fijos del mes.</p>
+
         <Lbl>Impuestos</Lbl>
         <p className="text-[11px] text-[var(--muted)] leading-relaxed">
           Se calculan solos con los factores del régimen simplificado: renta 1% de cada compra, más IVA según la tarifa de la factura
