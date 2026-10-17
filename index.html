@@ -2354,6 +2354,7 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
   const [mes, setMes] = useState(mesDe(hoyISO()));
   const [depositar, setDepositar] = useState(false);
   const [ajustar, setAjustar] = useState(false);
+  const [cuadrarPend, setCuadrarPend] = useState(false);
   const [auditar, setAuditar] = useState(false);
   const [socio, setSocio] = useState(null);
   const [pagando, setPagando] = useState(null);
@@ -2412,15 +2413,24 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
   const impVencidos = impuestos.filter((x)=>x.falta > 0 && x.vence < hoyISO());
 
   const abierto = (m) => !dentroDelCierre(m, ultimo);
+  /* Cuadres de lo que falta depositar: plata que el cierre dio por sacada de la
+     caja y que no llegó al banco. Bajan el pendiente sin inventar un depósito.
+     destino "gasto" → se fue del negocio · destino "caja" → nunca salió. */
+  const cuadresPend = movs.filter((m)=>m.tipo==="cuadre-pendiente");
+  const cuadrado = cuadresPend.reduce((a,m)=>a+m.monto,0);
+
   const efeEntra = ventas.filter((v)=>v.pago==="Efectivo" && abierto(v)).reduce((a,v)=>a+v.monto,0);
   const efeSale = gastosPlata.filter((g)=>g.pago==="Efectivo" && abierto(g)).reduce((a,g)=>a+g.monto,0);
-  const caja = fondo + monedas + efeEntra - efeSale;
+  const vueltoACaja = cuadresPend
+    .filter((m)=>m.destino === "caja" && abierto(m))
+    .reduce((a,m)=>a+m.monto, 0);
+  const caja = fondo + monedas + efeEntra - efeSale + vueltoACaja;
 
   /* --- pendiente de depositar --- */
   const retirado = cierres.reduce((a,c)=>a+(c.retiro||0),0);
   const depositos = movs.filter((m)=>m.tipo==="deposito");
   const depositado = depositos.reduce((a,m)=>a+m.monto,0);
-  const porDepositar = retirado - depositado;
+  const porDepositar = retirado - depositado - cuadrado;
   /* Solo un pendiente positivo es plata que existe fuera del banco. Si sale negativo
      es un descuadre de registro: esa plata ya está contada dentro del saldo bancario. */
   const pendienteReal = Math.max(0, porDepositar);
@@ -2591,7 +2601,7 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
   /* cierres que generaron el pendiente, del más viejo al más nuevo */
   const pendientes = useMemo(()=>{
     const cs = cierres.filter((c)=>(c.retiro||0)>0).sort((a,b)=>(a.fecha<b.fecha?-1:1));
-    let cubierto = depositado, out = [];
+    let cubierto = depositado + cuadrado, out = [];
     cs.forEach((c)=>{
       const r = c.retiro||0;
       if (cubierto >= r) { cubierto -= r; return; }
@@ -2599,7 +2609,7 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
       cubierto = 0;
     });
     return out.reverse();
-  }, [cierres, depositado]);
+  }, [cierres, depositado, cuadrado]);
 
   const historial = [...movs].sort((a,b)=>(a.fecha<b.fecha?1:a.fecha>b.fecha?-1:(b.creado||0)-(a.creado||0)));
 
@@ -3156,7 +3166,10 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
               <span className="font-mono tabular-nums">{C(c.falta)}</span>
             </div>
           ))}
-          <Btn kind="warn" className="w-full mt-3 py-3" onClick={()=>setDepositar(true)}>Registrar depósito</Btn>
+          <div className="grid grid-cols-2 gap-2 mt-3">
+            <Btn kind="warn" className="py-3" onClick={()=>setDepositar(true)}>Registrar depósito</Btn>
+            <Btn kind="ghost" className="py-3" onClick={()=>setCuadrarPend(true)}>Esa plata no está</Btn>
+          </div>
           {pendientes.some((c)=>diasDesde(new Date(c.fecha+"T12:00").getTime()) > 5) && (
             <p className="text-[11px] text-[var(--muted)] mt-2">● lleva más de 5 días fuera del banco.</p>
           )}
@@ -3178,7 +3191,9 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
           {historial.slice(0,30).map((m)=>(
             <div key={m.id} className="flex justify-between items-center py-2 border-b border-[var(--line)] last:border-0">
               <div className="min-w-0">
-                <div className="text-sm">{m.tipo==="deposito" ? "Depósito al banco" : (m.metodo==="cuadre" ? "Cuadre con el banco" : "Ajuste de banco")}</div>
+                <div className="text-sm">{m.tipo==="deposito" ? "Depósito al banco"
+                  : m.tipo==="cuadre-pendiente" ? (m.destino==="caja" ? "Cuadre · volvió a la caja" : "Cuadre · se gastó en efectivo")
+                  : (m.metodo==="cuadre" ? "Cuadre con el banco" : "Ajuste de banco")}</div>
                 <div className="text-[11px] text-[var(--muted)] font-mono truncate">{fmtFecha(m.fecha)}{m.nota ? " · " + m.nota : ""}</div>
                 {m.saldoDespues != null && <div className="text-[11px] text-[var(--muted)] font-mono">quedó en {C(m.saldoDespues)}</div>}
               </div>
@@ -3194,6 +3209,16 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
       <p className="text-[11px] text-[var(--muted)] leading-relaxed">
         Las ventas por SINPE y tarjeta entran directo al banco. Las de efectivo se quedan en la caja hasta que cerrás el día. Al cerrar, solo los billetes que pasan del fondo van a "por depositar"; las monedas se quedan siempre en la caja.
       </p>
+
+      {cuadrarPend && (
+        <CuadrePendienteModal
+          pendiente={pendienteReal}
+          guardar={guardar}
+          usuario={usuario}
+          aviso={aviso}
+          onClose={()=>setCuadrarPend(false)}
+        />
+      )}
 
       {depositar && (
         <DepositoModal
@@ -3371,6 +3396,93 @@ const RAZONES = [
   "Venta o gasto que no se registró",
   "Error de digitación",
 ];
+
+/* Cuadre de lo que falta depositar. La plata que el cierre dio por sacada y que
+   no llegó al banco se fue a algún lado, y de dónde depende qué más hay que
+   corregir. Por eso se pregunta en vez de borrarla en silencio. */
+function CuadrePendienteModal({ pendiente, guardar, usuario, aviso, onClose }) {
+  const [monto, setMonto] = useState(String(Math.round(pendiente)));
+  const [destino, setDestino] = useState(null);
+  const [yaAnotado, setYaAnotado] = useState(false);
+  const [nota, setNota] = useState("");
+  const m = num(monto);
+
+  const OPC = [
+    ["caja", "Nunca salió de la caja",
+     "El cierre contó de más, o los billetes se quedaron y se usaron de vuelto. La plata vuelve a la caja y el próximo cierre la cuenta otra vez."],
+    ["gasto", "Se gastó en efectivo",
+     "Se pagó algo con esa plata en vez de depositarla. Sale del negocio."],
+  ];
+
+  const grabar = async () => {
+    if (!(m > 0) || !destino) return;
+    await guardar("movimientos", {
+      id: UID(), creado: Date.now(), fecha: hoyISO(),
+      tipo: "cuadre-pendiente", destino, monto: m,
+      nota: (nota.trim() || (destino === "caja" ? "Nunca salió de la caja" : "Se gastó en efectivo")),
+      usuario,
+    });
+    aviso(`Pendiente cuadrado · ${C(m)}`);
+    onClose();
+  };
+
+  return (
+    <Modal title="Cuadrar lo que falta depositar" onClose={onClose}>
+      <div className="p-4">
+        <p className="text-[13px] text-[var(--muted)] leading-relaxed mb-3">
+          La app cree que hay <span className="f-mono text-[var(--ink)]">{C(Math.round(pendiente))}</span> fuera
+          del banco porque los cierres de caja anotaron esos billetes como sacados. Si esa plata no está, decí dónde quedó.
+        </p>
+
+        <Lbl>Cuánto hay que cuadrar</Lbl>
+        <Inp inputMode="decimal" value={monto} onChange={(e)=>setMonto(e.target.value)} className="font-mono tabular-nums text-lg mb-1" />
+        <p className="text-[11px] text-[var(--muted)] mb-3">
+          Dejá el total si no quedó nada por depositar. Poné menos si una parte sí está y la vas a llevar al banco.
+        </p>
+
+        <Lbl>Dónde quedó esa plata</Lbl>
+        <div className="space-y-2 mb-3">
+          {OPC.map(([id, titulo, detalle])=>(
+            <button key={id} onClick={()=>setDestino(id)} aria-pressed={destino===id}
+              className={"w-full text-left px-3 py-2.5 rounded-[8px] border min-h-[48px] " + (destino===id
+                ? "border-2 border-[var(--ink)] bg-white"
+                : "border-[var(--line-strong)] bg-white")}>
+              <span className="text-[14px] font-medium">
+                <span className="mr-1.5">{destino===id ? "●" : "○"}</span>{titulo}
+              </span>
+              <span className="block text-[12px] text-[var(--muted)] leading-snug mt-0.5 ml-[20px]">{detalle}</span>
+            </button>
+          ))}
+        </div>
+
+        {destino === "gasto" && (
+          <div className="mb-3">
+            <button onClick={()=>setYaAnotado(!yaAnotado)} aria-pressed={yaAnotado}
+              className="w-full text-left px-3 py-2.5 rounded-[8px] border border-[var(--line-strong)] bg-white min-h-[48px]">
+              <span className="text-[13px]">
+                <span className="mr-1.5">{yaAnotado ? "○" : "◐"}</span>
+                Ese gasto ya está anotado como salida
+              </span>
+            </button>
+            {!yaAnotado && (
+              <p className="text-[12px] text-[var(--muted)] leading-relaxed mt-1.5">
+                ◐ Si no lo anotás como salida, la plata desaparece del total pero la ganancia va a quedar
+                más alta de lo real. Cuadrá aquí y después registrá la salida en Registrar.
+              </p>
+            )}
+          </div>
+        )}
+
+        <Lbl>Nota (opcional)</Lbl>
+        <Inp value={nota} onChange={(e)=>setNota(e.target.value)} placeholder="Cierres de agosto que nunca llevé al banco" className="mb-4" />
+
+        <Btn kind="signal" className="w-full commit" disabled={!(m > 0) || !destino} onClick={grabar}>
+          {destino ? `Cuadrar ${C(m)}` : "Elegí dónde quedó"}
+        </Btn>
+      </div>
+    </Modal>
+  );
+}
 
 function AjusteBancoModal({ banco, bancoAcreditado, tarjetaPend, cfg, guardar, usuario, aviso, onClose }) {
   const [modo, setModo] = useState("cuadrar");
