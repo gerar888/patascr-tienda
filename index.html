@@ -264,11 +264,14 @@ const calcTope = (ventas, gastos, cfg, mes) => {
   const ventasPrev = ventas.filter((v)=>mesDe(v.fecha) === prev).reduce((a,v)=>a+v.monto, 0);
   const tope = ventasPrev * (pct/100);
   const comprado = gastos
-    .filter((g)=>g.categoria === "Mercadería" && mesDe(g.fecha) === mes)
+    .filter((g)=>g.categoria === "Mercadería" && mesDe(g.fecha) === mes && !ES_CONTRA(g))
+    .reduce((a,g)=>a+g.monto, 0);
+  const contra = gastos
+    .filter((g)=>g.categoria === "Mercadería" && mesDe(g.fecha) === mes && ES_CONTRA(g))
     .reduce((a,g)=>a+g.monto, 0);
   const usado = tope > 0 ? (comprado/tope)*100 : (comprado > 0 ? 100 : 0);
   return {
-    pct, mes, mesPrev: prev, ventasPrev, tope, comprado,
+    pct, mes, mesPrev: prev, ventasPrev, tope, comprado, contra,
     disponible: tope - comprado, usado,
     sev: usado >= 100 ? "●" : usado >= 70 ? "◐" : "○",
     sinBase: ventasPrev <= 0,
@@ -296,8 +299,14 @@ const CATS = ["Mercadería", "Empaque", "Alquiler", "Servicios", "Transporte", "
 /* Sacar plata para la casa no es un gasto del negocio: no entra en el tope de
    compras, no es gasto fijo y no baja la ganancia. Solo baja la plata. */
 const ES_RETIRO = (g) => g.categoria === "Retiro socios";
+/* Compra contra pedido: mercadería que ya tiene dueño antes de entrar. No es
+   bodega disponible ni consumo del tope, porque no fue una decisión de surtido. */
+const ES_CONTRA = (g) => !!g.contraPedido;
 const PAGOS = ["Efectivo", "SINPE", "Tarjeta", "Otro"];
-const CFG_DEF = { id: "general", meta: 140000, costoPct: 80, excluirDomingos: true, margenGranel: 20, margenSaco: 15, fondoCaja: 20000, saldoBanco: 0, diasTarjeta: 1, inventarioIni: 0, semanasColchon: 4, colchonPctMin: 10, socios: 2, retiroMensual: 0, costoSinIVA: true, tarifaIVA: 13, gananciaDef: 20, regimen: "simplificado", impuestoCompras: 0, margenNoIdent: 18, pctTope: 70, margenCierre: 22 };
+const CFG_DEF = { id: "general", meta: 140000, costoPct: 80, excluirDomingos: true, margenGranel: 20, margenSaco: 15, fondoCaja: 20000, saldoBanco: 0, diasTarjeta: 1, inventarioIni: 0, semanasColchon: 4, colchonPctMin: 10, socios: 2, retiroMensual: 0, costoSinIVA: true, tarifaIVA: 13, gananciaDef: 20, regimen: "simplificado", impuestoCompras: 0, margenNoIdent: 18, pctTope: 70, margenCierre: 22,
+  /* inventario: base del último conteo físico, su fecha, y el objetivo en días de costo */
+  inventarioBase: 0, inventarioFecha: null, invObjetivoDias: 30, ultimoConteo: null,
+  reintegroMensual: 50000, noSubirPrecios: false };
 
 /* ---------- convención única de IVA ----------
    Los costos se guardan SIN IVA (así vienen en el XML y así se acreditan).
@@ -352,18 +361,41 @@ function identificar(txt, precios, enlaces) {
 }
 
 /* deduce si el monto corresponde a saco completo o a granel, y calcula el costo */
-function costoDeVenta(p, monto) {
+/* mayoreo: a la pulpería se le vende más barato, así que deducir los kilos con
+   el precio de mostrador inflaría la cantidad y el costo. */
+const ES_MAYOREO = (v) => norm(v && v.cliente || "").includes("pulperia");
+
+/* Alias: "Doña Isabel", "isabel" y "Isa" son la misma persona. Sin esto cada
+   forma de escribir el nombre cuenta como cliente distinto y la cadencia no sale. */
+const aliasDe = (nombre, cfg) => {
+  const n = norm(nombre || "");
+  const mapa = (cfg && cfg.aliasClientes) || {};
+  for (const canon in mapa) {
+    const lista = mapa[canon] || [];
+    if (norm(canon) === n || lista.some((x)=>norm(x) === n)) return norm(canon);
+  }
+  return n;
+};
+const waLink = (tel, texto) => {
+  const t = String(tel||"").replace(/\D/g, "");
+  const num = t.length === 8 ? "506" + t : t;
+  return `https://wa.me/${num}?text=${encodeURIComponent(texto)}`;
+};
+
+function costoDeVenta(p, monto, mayoreo) {
   if (!p || monto <= 0) return null;
   const costoKilo = p.peso > 0 ? p.costo / p.peso : 0;
+  const pKilo = (mayoreo && num(p.precioMayoreo) > 0) ? num(p.precioMayoreo) : p.precioKilo;
+  const pSaco = (mayoreo && num(p.precioMayoreoSaco) > 0) ? num(p.precioMayoreoSaco) : p.precioSaco;
 
   const opciones = [];
-  if (p.precioSaco > 0) {
-    const n = monto / p.precioSaco;
+  if (pSaco > 0) {
+    const n = monto / pSaco;
     const redondo = Math.round(n);
     if (redondo >= 1) opciones.push({ tipo: "saco", cantidad: redondo, costo: redondo * p.costo, error: Math.abs(n - redondo) / n });
   }
-  if (p.precioKilo > 0 && costoKilo > 0) {
-    const kilos = monto / p.precioKilo;
+  if (pKilo > 0 && costoKilo > 0) {
+    const kilos = monto / pKilo;
     opciones.push({ tipo: "granel", cantidad: kilos, costo: kilos * costoKilo, error: 0.5 });
   }
   if (!opciones.length) return null;
@@ -457,6 +489,12 @@ const TopeCompras = ({ t, compacta }) => {
       <div className="mt-2 space-y-0.5">
         <Linea label="Tope del mes" val={C(Math.round(t.tope))} />
         <Linea label="Comprado en mercadería" val={"− " + C(Math.round(t.comprado))} />
+        {t.contra > 0 && (
+          <div className="flex justify-between items-baseline gap-3 text-[12px] text-[var(--muted)] pl-3">
+            <span>aparte: {C(Math.round(t.contra))} contra pedido</span>
+            <span className="f-mono">—</span>
+          </div>
+        )}
         <Linea label={t.disponible >= 0 ? "Disponible" : "Pasado del tope"}
           val={(t.disponible < 0 ? "− " : "") + C(Math.abs(Math.round(t.disponible)))} fuerte />
       </div>
@@ -961,6 +999,9 @@ function VentaForm({ ventas, gastos, precios, enlaces, cierres, cfg, guardar, av
 
   const totalItems = items.reduce((a,i)=>a + num(i.total), 0);
   const hayLineas = porLinea && items.length > 0;
+  /* palabras que casi siempre significan precio distinto al de lista */
+  const PROMO = ["combo", "promo", "oferta", "descuento", "rebaja", "2x1", "regalo"];
+  const hayPromo = !porLinea && PROMO.some((w)=>norm(prod).includes(w));
   const ajustado = hayLineas && Math.abs(num(monto) - totalItems) > 0.5;
 
   /* el total de las líneas manda sobre el readout, salvo que se toque a mano */
@@ -1183,6 +1224,21 @@ function VentaForm({ ventas, gastos, precios, enlaces, cierres, cfg, guardar, av
             <Lbl>Producto</Lbl>
             <Inp list="prods" value={prod} onChange={(e)=>setProd(e.target.value)} placeholder="Nutri salmón perro" />
             <datalist id="prods">{productosPrev.map((p)=><option key={p} value={p} />)}</datalist>
+
+            {/* Con descuento, el app deduce los kilos dividiendo el monto entre el
+               precio de lista: menos kilos, menos costo, y el margen sale intacto.
+               La promo se vuelve invisible. Por eso empuja al modo por producto. */}
+            {hayPromo && (
+              <div className="mt-2 rounded-[8px] border-2 border-[var(--attention)] bg-white p-3">
+                <div className="text-[13px] font-medium mb-1">◐ Esto parece una promo</div>
+                <p className="text-[12px] text-[var(--muted)] leading-relaxed mb-2">
+                  Con solo el monto, el app calcula los kilos con el precio de lista. Un cobro con descuento
+                  le da menos kilos y menos costo, y el margen sale como si no hubiera habido rebaja.
+                  Anotala por producto y el descuento queda visible.
+                </p>
+                <Btn kind="signal" className="w-full" onClick={()=>cambiarModo(true)}>Pasar a por producto</Btn>
+              </div>
+            )}
 
             {recientes.length > 0 && (
               <div className="flex flex-wrap gap-1.5 mt-2">
@@ -1510,6 +1566,7 @@ function GastoForm({ ventas, gastos, fijos, precios, enlaces, cfg, guardar, borr
   const [trimPago, setTrimPago] = useState(null);
   const [cerrarTrim, setCerrarTrim] = useState(true);
   const [avisoTope, setAvisoTope] = useState(null);   /* {exceso} mientras se confirma */
+  const [contraPedido, setContraPedido] = useState(false);
 
   const tope = useMemo(()=>calcTope(ventas||[], gastos||[], cfg, mesDe(fecha)), [ventas, gastos, cfg, fecha]);
 
@@ -1527,21 +1584,23 @@ function GastoForm({ ventas, gastos, fijos, precios, enlaces, cfg, guardar, borr
   const provPrev = useMemo(()=>[...new Set(gastos.map((g)=>g.detalle).filter(Boolean))].sort(), [gastos]);
   const delDia = gastos.filter((g)=>g.fecha === fecha);
 
-  const registrar = async (contraPedido) => {
+  const registrar = async (cpModal) => {
     const m = num(monto);
+    const cp = cpModal != null ? !!cpModal : contraPedido;
     /* No se bloquea la compra: se avisa y se deja constancia de por qué se pasó. */
-    if (cat === "Mercadería" && avisoTope === null && !tope.sinBase && (tope.disponible - m) < 0) {
+    /* lo contra pedido no consume el tope, así que no tiene sentido avisar */
+    if (cat === "Mercadería" && !cp && avisoTope === null && !tope.sinBase && (tope.disponible - m) < 0) {
       setAvisoTope({ exceso: m - Math.max(0, tope.disponible) });
       return;
     }
     const doc = { id: UID(), creado: Date.now(), fecha, categoria: cat, detalle: detalle.trim(), monto: m, pago, usuario };
-    if (contraPedido) doc.contraPedido = true;
+    if (cp) doc.contraPedido = true;
     if (avisoTope) doc.sobreTope = Math.round(avisoTope.exceso);
     if (cat === "Mercadería" || cat === "Empaque") doc.tarifa = tarifa;
     if (cat === "Impuestos") { doc.trimestre = trimElegido; doc.cerrado = cerrarTrim; }
     if (credito) { doc.credito = true; doc.pagado = false; doc.vence = vence || venceSugerido; }
     await guardar("gastos", doc);
-    setDetalle(""); setMonto(""); setVence(""); setTrimPago(null); setCerrarTrim(true); setAvisoTope(null);
+    setDetalle(""); setMonto(""); setVence(""); setTrimPago(null); setCerrarTrim(true); setAvisoTope(null); setContraPedido(false);
     aviso(cat === "Impuestos"
       ? `Impuestos de ${nomTrim(trimElegido)} · ${C(m)}`
       : "Salida guardada · " + C(m));
@@ -1560,7 +1619,22 @@ function GastoForm({ ventas, gastos, fijos, precios, enlaces, cfg, guardar, borr
             <button key={c} onClick={()=>setCat(c)} className={"px-2.5 py-1.5 rounded-full border text-[12px] " + (cat===c ? "bg-[var(--ink)] text-white border-[var(--ink)]" : "bg-white border-[var(--line-strong)]")}>{c}</button>
           ))}
         </div>
-        {cat === "Mercadería" && !tope.sinBase && (
+        {(cat === "Mercadería" || cat === "Empaque") && (
+          <button onClick={()=>setContraPedido(!contraPedido)} aria-pressed={contraPedido}
+            className={"w-full text-left px-3 py-2.5 rounded-[8px] border min-h-[48px] mb-3 bg-white " + (contraPedido
+              ? "border-2 border-[var(--ink)]" : "border-[var(--line-strong)]")}>
+            <span className="text-[13px]">
+              <span className="mr-1.5">{contraPedido ? "●" : "○"}</span>
+              Contra pedido de un cliente
+            </span>
+            <span className="block text-[11px] text-[var(--muted)] leading-snug mt-0.5">
+              {contraPedido
+                ? "Esta mercadería ya tiene dueño: no entra a la bodega disponible ni consume el tope del mes."
+                : "Marcalo si la compraste para un cliente que ya la pidió, no para surtir."}
+            </span>
+          </button>
+        )}
+        {cat === "Mercadería" && !contraPedido && !tope.sinBase && (
           <div className="mb-3"><TopeCompras t={tope} compacta /></div>
         )}
         {cat === "Impuestos" && (
@@ -1664,7 +1738,7 @@ function GastoForm({ ventas, gastos, fijos, precios, enlaces, cfg, guardar, borr
               <div className="min-w-0">
                 <div className="text-sm truncate">{g.detalle || g.categoria}</div>
                 <div className="text-[11px] text-[var(--muted)]">
-                  {g.categoria} · {g.credito && !g.pagado ? `◐ a crédito, vence ${g.vence ? fmtFecha(g.vence) : "sin fecha"}` : g.pago}
+                  {g.categoria}{ES_CONTRA(g) ? " · contra pedido" : ""} · {g.credito && !g.pagado ? `◐ a crédito, vence ${g.vence ? fmtFecha(g.vence) : "sin fecha"}` : g.pago}
                 </div>
               </div>
               <span className="font-mono tabular-nums text-sm font-medium ml-2">− {C(g.monto)}</span>
@@ -2165,10 +2239,12 @@ function analizarVentas(lista, precios, enlaces) {
         if (it.costo != null && it.costo > 0) {
           ventaId += t; costoId += it.costo;
           const k = it.productoId || norm(it.nombre);
-          if (!porProducto[k]) porProducto[k] = { nombre: it.nombre, venta:0, costo:0, veces:0, kg:0, uds:0 };
+          const pr = it.productoId ? precios.find((x)=>x.id === it.productoId) : null;
+          if (!porProducto[k]) porProducto[k] = { id: it.productoId || null, nombre: it.nombre, venta:0, costo:0, veces:0, kg:0, uds:0, vSaco:0, vGranel:0, gancho: !!(pr && pr.gancho) };
           porProducto[k].venta += t; porProducto[k].costo += it.costo; porProducto[k].veces++;
           porProducto[k].kg += num(it.kg);
           porProducto[k].uds += num(it.cantidad);
+          if (it.modo === "saco") porProducto[k].vSaco += t; else porProducto[k].vGranel += t;
         } else {
           sinId += t;
           const k = norm(it.nombre);
@@ -2179,15 +2255,17 @@ function analizarVentas(lista, precios, enlaces) {
       return;
     }
     const ps = partes(v.producto), porParte = v.monto/ps.length;
+    const mayoreo = ES_MAYOREO(v);
     ps.forEach((txt)=>{
       const r = identificar(txt, precios, enlaces);
       if (r.ignorado) { ventaId += porParte; return; }
-      const c = r.p ? costoDeVenta(r.p, porParte) : null;
+      const c = r.p ? costoDeVenta(r.p, porParte, mayoreo) : null;
       if (c) {
         ventaId += porParte; costoId += c.costo;
         const k = r.p.id;
-        if (!porProducto[k]) porProducto[k] = { nombre: r.p.nombre, venta:0, costo:0, veces:0, kg:0, uds:0 };
+        if (!porProducto[k]) porProducto[k] = { id: r.p.id, nombre: r.p.nombre, venta:0, costo:0, veces:0, kg:0, uds:0, vSaco:0, vGranel:0, gancho: !!r.p.gancho };
         porProducto[k].venta += porParte; porProducto[k].costo += c.costo; porProducto[k].veces++;
+        if (c.tipo === "saco") porProducto[k].vSaco += porParte; else porProducto[k].vGranel += porParte;
         porProducto[k].kg += (c.tipo === "saco" ? c.cantidad * num(r.p.peso) : c.cantidad);
         porProducto[k].uds += c.cantidad;
       } else {
@@ -2223,6 +2301,169 @@ function gananciaDe(a, cfg) {
 
 /* ================= DINERO ================= */
 const EN_BANCO = ["SINPE", "Tarjeta", "Otro"];
+
+/* =====================================================================
+   calcRetiro — la ÚNICA cuenta de cuánto se puede sacar del negocio.
+
+   Existía dos veces, con reglas distintas: Dinero miraba plata real y el
+   cierre mensual aplicaba un margen fijo sobre las ventas. Daban números
+   que no se parecían y el de la regla era siempre el optimista.
+   Ahora la cuenta vive aquí y la usan Dinero, el cierre y el respaldo que
+   se sube al análisis, para que las tres digan lo mismo.
+
+   El criterio: se puede sacar el MENOR entre
+     (a) la plata que existe hoy menos todo lo que ya tiene dueño, y
+     (b) la ganancia del mes que todavía no se ha repartido.
+   ===================================================================== */
+/* Inventario teórico desde el último conteo físico.
+   Antes se medía con un flujo de 30 días que no miraba la bodega: si un mes se
+   compraba poco porque el anterior se había hecho acopio, la ventana agarraba
+   el valle y declaraba una deuda contra sacos que estaban en el piso. */
+function calcInventario({ ventas, gastos, precios, enlaces, cfg }) {
+  const base = cfg.inventarioBase || 0;
+  const desde = cfg.inventarioFecha || null;
+  const dentro = (f) => !desde || f >= desde;
+
+  const comprado = gastos
+    .filter((g)=>g.categoria === "Mercadería" && dentro(g.fecha) && !ES_CONTRA(g))
+    .reduce((a,g)=>a+g.monto, 0);
+  const contraPedido = gastos
+    .filter((g)=>g.categoria === "Mercadería" && dentro(g.fecha) && ES_CONTRA(g))
+    .reduce((a,g)=>a+g.monto, 0);
+  const vendidoAlCosto = gananciaDe(
+    analizarVentas(ventas.filter((v)=>dentro(v.fecha)), precios, enlaces), cfg).costo;
+  const teorico = base + comprado - vendidoAlCosto;
+
+  /* el objetivo se expresa en días de costo para que siga al volumen real */
+  const d30 = new Date(); d30.setDate(d30.getDate()-30);
+  const hace30 = d30.toLocaleDateString("en-CA");
+  const costo30 = gananciaDe(
+    analizarVentas(ventas.filter((v)=>v.fecha>=hace30), precios, enlaces), cfg).costo;
+  const costoDiario = costo30/30;
+  const dias = cfg.invObjetivoDias != null ? cfg.invObjetivoDias : 30;
+  const objetivo = costoDiario * dias;
+
+  return {
+    base, desde, comprado, contraPedido, vendidoAlCosto, teorico, objetivo, dias, costoDiario, costo30,
+    reponerPend: Math.max(0, objetivo - teorico),
+    sobrante: Math.max(0, teorico - objetivo),
+    diasEnBodega: costoDiario > 0 ? teorico/costoDiario : null,
+    sinBase: !desde,
+  };
+}
+
+function calcRetiro({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg }) {
+  const mesAct = mesDe(hoyISO());
+  const gastosPlata = normPlata(gastos);
+
+  /* --- dónde está la plata --- */
+  const ordenados = [...cierres].sort((a,b)=>(a.fecha<b.fecha?-1:1));
+  const ultimo = ordenados.length ? ordenados[ordenados.length-1] : null;
+  const fondo = cfg.fondoCaja || 0;
+  const monedas = ultimo ? (ultimo.monedas != null ? ultimo.monedas : 0) : 0;
+  const abierto = (m) => !dentroDelCierre(m, ultimo);
+  const cuadresPend = movs.filter((m)=>m.tipo==="cuadre-pendiente");
+  const cuadrado = cuadresPend.reduce((a,m)=>a+m.monto,0);
+  const efeEntra = ventas.filter((v)=>v.pago==="Efectivo" && abierto(v)).reduce((a,v)=>a+v.monto,0);
+  const efeSale = gastosPlata.filter((g)=>g.pago==="Efectivo" && abierto(g)).reduce((a,g)=>a+g.monto,0);
+  const vueltoACaja = cuadresPend.filter((m)=>m.destino==="caja" && abierto(m)).reduce((a,m)=>a+m.monto,0);
+  const caja = fondo + monedas + efeEntra - efeSale + vueltoACaja;
+
+  const retirado = cierres.reduce((a,c)=>a+(c.retiro||0),0);
+  const depositado = movs.filter((m)=>m.tipo==="deposito").reduce((a,m)=>a+m.monto,0);
+  const pendienteReal = Math.max(0, retirado - depositado - cuadrado);
+
+  const ajustes = movs.filter((m)=>m.tipo==="ajuste");
+  const entraBanco = ventas.filter((v)=>EN_BANCO.includes(v.pago)).reduce((a,v)=>a+v.monto,0);
+  const saleBanco = gastosPlata.filter((g)=>EN_BANCO.includes(g.pago)).reduce((a,g)=>a+g.monto,0);
+  const banco = (cfg.saldoBanco||0) + entraBanco - saleBanco + depositado + ajustes.reduce((a,m)=>a+m.monto,0);
+  const totalNegocio = caja + pendienteReal + banco;
+
+  /* --- lo que ya tiene dueño --- */
+  const deudas = porVencer(gastos);
+  const porPagar = deudas.reduce((a,g)=>a+g.monto,0);
+
+  const porTrim = {};
+  gastos.forEach((g)=>{
+    const imp = impuestoDe(g);
+    if (imp <= 0) return;
+    const t = trimestreDe(g.fecha);
+    if (!porTrim[t]) porTrim[t] = { total: 0, pagado: 0, cerrado: false };
+    porTrim[t].total += imp;
+  });
+  gastos.filter((g)=>g.categoria==="Impuestos").forEach((g)=>{
+    const t = g.trimestre || trimPrevio(trimestreDe(g.fecha));
+    if (!porTrim[t]) porTrim[t] = { total: 0, pagado: 0, cerrado: false };
+    porTrim[t].pagado += g.monto;
+    if (g.cerrado !== false) porTrim[t].cerrado = true;
+  });
+  const impuesto = Object.values(porTrim)
+    .reduce((a,x)=>a + (x.cerrado ? 0 : Math.max(0, x.total - x.pagado)), 0);
+
+  const fijosMensuales = (fijos||[]).reduce((a,f)=>a+f.monto,0);
+  const semanas = cfg.semanasColchon != null ? cfg.semanasColchon : 4;
+  const pctMin = cfg.colchonPctMin != null ? cfg.colchonPctMin : 10;
+  const colchon = Math.max(fijosMensuales * (semanas/4), totalNegocio * (pctMin/100));
+
+  const aportes = movs.filter((m)=>m.metodo==="aporte").reduce((a,m)=>a+Math.abs(m.monto),0);
+  const devueltos = movs.filter((m)=>m.metodo==="retiro").reduce((a,m)=>a+Math.abs(m.monto),0);
+  const aportePend = Math.max(0, aportes - devueltos);
+
+  /* reposición pendiente: contra el inventario, no contra un flujo de 30 días */
+  const INV = calcInventario({ ventas, gastos, precios, enlaces, cfg });
+  const reponer = INV.reponerPend;
+
+  /* --- la ganancia del mes: de ahí sale el retiro --- */
+  const vMes = ventas.filter((v)=>mesDe(v.fecha)===mesAct);
+  const gMes = gastosPlata.filter((g)=>mesDe(g.fecha)===mesAct);
+  const G = gananciaDe(analizarVentas(vMes, precios, enlaces), cfg);
+  const ventasMes = vMes.reduce((a,v)=>a+v.monto,0);
+  const margenReal = ventasMes > 0 ? (G.bruta/ventasMes)*100 : 0;
+  const margenCfg = cfg.margenCierre != null ? cfg.margenCierre : 22;
+
+  const fijosDelMes = gMes.filter((g)=>g.fijoId).reduce((a,g)=>a+g.monto,0);
+  const otrosDelMes = gMes.filter((g)=>g.categoria!=="Mercadería" && g.categoria!=="Impuestos" && !ES_RETIRO(g) && !g.fijoId).reduce((a,g)=>a+g.monto,0);
+  /* impuesto que devengaron las compras del mes: es reserva, no se reparte */
+  const impMesDev = gastos.filter((g)=>mesDe(g.fecha)===mesAct).reduce((a,g)=>a+impuestoDe(g), 0);
+
+  /* ganancia del mes = ventas × margen − fijos − reserva de impuestos − reintegro.
+     Se toma el menor entre el margen objetivo y el margen real: cobrar menos de
+     lo planeado no crea ganancia. */
+  const brutaObjetivo = ventasMes * (margenCfg/100);
+  const bruta = Math.min(brutaObjetivo, G.bruta);
+  /* el reintegro a socios se devuelve a plazos, no de un solo golpe */
+  const reintegroTope = cfg.reintegroMensual != null ? cfg.reintegroMensual : 50000;
+  const reintegroMes = Math.min(reintegroTope, aportePend);
+  const gananciaMes = bruta - fijosDelMes - otrosDelMes - impMesDev - reintegroMes;
+
+  const retiradoMes = movs.filter((m)=>m.metodo==="retiro" && mesDe(m.fecha)===mesAct)
+      .reduce((a,m)=>a+Math.abs(m.monto),0)
+    + gastos.filter((g)=>ES_RETIRO(g) && mesDe(g.fecha)===mesAct).reduce((a,g)=>a+g.monto,0);
+  const techoGanancia = Math.max(0, gananciaMes - retiradoMes);
+
+  /* chequeo de caja: la reposición no se resta de la ganancia, pero la plata
+     tiene que alcanzar para las dos cosas. */
+  const cajaDisponible = totalNegocio - porPagar - impuesto;
+  const cupoCaja = Math.max(0, cajaDisponible - reponer);
+  const retirable = Math.max(0, Math.min(techoGanancia, cupoCaja));
+  const socios = Math.max(1, cfg.socios || 2);
+
+  const comprometido = reponer + porPagar + impuesto;
+  const libre = cupoCaja;
+
+  return {
+    mes: mesAct, totalNegocio, caja, pendienteReal, banco,
+    inv: INV, reponer, fijosMensuales, aportePend, colchon, impuesto, porPagar,
+    impMesDev, fijosDelMes, otrosDelMes, reintegroMes, reintegroTope,
+    cajaDisponible, cupoCaja, comprometido, libre,
+    ventasMes, gananciaBruta: G.bruta, brutaObjetivo, bruta, margenReal, margenCfg,
+    gananciaMes, retiradoMes, techoGanancia, retirable, socios,
+    porSocio: Math.floor(retirable/socios),
+    limita: cupoCaja < techoGanancia ? "plata" : "ganancia",
+    falta: cupoCaja < techoGanancia ? techoGanancia - cupoCaja : 0,
+  };
+}
+
 
 const ACREDITA = [
   [0, "El mismo día, al instante"],
@@ -2355,6 +2596,7 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
   const [depositar, setDepositar] = useState(false);
   const [ajustar, setAjustar] = useState(false);
   const [cuadrarPend, setCuadrarPend] = useState(false);
+  const [conteo, setConteo] = useState(false);
   const [auditar, setAuditar] = useState(false);
   const [socio, setSocio] = useState(null);
   const [pagando, setPagando] = useState(null);
@@ -2540,20 +2782,16 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
   const reponer = Math.max(0, costo30 - merca30);
   const alDia = costo30 > 0 ? Math.min(200, (merca30/costo30)*100) : 100;
 
-  const comprometido = reponer + fijosMensuales + aportePend + colchon + impuesto + porPagar;
-  const libre = totalNegocio - comprometido;
-  /* Lo retirable es el menor entre la plata libre y la ganancia que todavía no se ha sacado.
-     Retirar por encima de la ganancia es sacar capital de trabajo. */
-  /* Se puede sacar plata de dos maneras: como movimiento de socio o anotada como
-     salida "Retiro socios". El techo tiene que ver las dos o se retira dos veces. */
-  const retiradoMes = movs
-    .filter((m)=>m.metodo === "retiro" && mesDe(m.fecha) === mesDe(hoyISO()))
-    .reduce((a,m)=>a + Math.abs(m.monto), 0)
-    + gastos.filter((g)=>ES_RETIRO(g) && mesDe(g.fecha) === mesDe(hoyISO()))
-        .reduce((a,g)=>a + g.monto, 0);
-  const techoGanancia = Math.max(0, gananciaMes - retiradoMes);
-  const retirable = Math.max(0, Math.min(libre, techoGanancia));
-  const limita = libre < techoGanancia ? "plata" : "ganancia";
+  /* La cuenta del retiro vive en calcRetiro, fuera de esta pantalla, porque el
+     cierre mensual y el respaldo del análisis tienen que dar lo mismo. */
+  const R = useMemo(()=>calcRetiro({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg }),
+    [ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg]);
+  const comprometido = R.comprometido;
+  const libre = R.libre;
+  const retiradoMes = R.retiradoMes;
+  const techoGanancia = R.techoGanancia;
+  const retirable = R.retirable;
+  const limita = R.limita;
   const metaRetiro = cfg.retiroMensual || 0;
   const sugerido = retirable;
 
@@ -2566,7 +2804,7 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
       })),
       ...gastosPlata.filter((g)=>EN_BANCO.includes(g.pago)).map((g)=>({
         fecha: g.fecha, creado: g.creado||0, monto: -g.monto,
-        que: g.detalle || g.categoria, detalle: "Salida · " + g.categoria + " · " + g.pago, clase: "gasto"
+        que: g.detalle || g.categoria, detalle: "Salida · " + g.categoria + (ES_CONTRA(g) ? " · contra pedido" : "") + " · " + g.pago, clase: "gasto"
       })),
       ...movs.filter((m)=>m.tipo==="deposito").map((m)=>({
         fecha: m.fecha, creado: m.creado||0, monto: m.monto,
@@ -2647,9 +2885,9 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
         <p className="text-[13px] text-[rgba(242,243,240,.75)] leading-relaxed mt-3">
           {retirable <= 0
             ? (libre <= 0
-                ? `No alcanza. Faltan ${C(Math.abs(libre))} para cubrir reposición, fijos, deudas y colchón. Este mes no se retira.`
+                ? `No alcanza. Faltan ${C(Math.abs(libre))} para cubrir la reposición, las facturas de proveedor y los impuestos apartados. Este mes no se retira.`
                 : `Hay ${C(libre)} sueltos en el banco, pero el negocio ${gananciaMes <= 0 ? "no generó ganancia este mes" : `ya repartió los ${C(gananciaMes)} que ganó`}. Esa plata es capital de trabajo: sacarla descapitaliza la tienda.`)
-            : `Ya está descontado todo: reposición, gastos fijos, facturas de proveedor y colchón. Esto es ganancia limpia y sacarla no afecta la operación.`}
+            : `Ya está descontado todo: gastos fijos, impuestos, reposición de bodega y facturas de proveedor. Esto es ganancia limpia y sacarla no afecta la operación.`}
         </p>
 
         {retirable > 0 && (
@@ -2683,20 +2921,45 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
       {/* ---------- por qué ese número y no otro ---------- */}
       <Card className="p-4">
         <span className="f-head block text-[11px] mb-3">Por qué ese número</span>
-        <div className="space-y-1">
-          <Linea label="Plata libre después de apartar todo" val={C(Math.max(0, libre))} />
-          <Linea label={retiradoMes > 0 ? `Ganancia del mes que falta repartir` : "Ganancia real del mes"} val={C(techoGanancia)} />
-          <div className="pt-2 mt-1 border-t border-[var(--line-strong)]">
-            <Linea label="Se toma el menor de los dos" val={C(Math.floor(retirable))} fuerte />
-          </div>
+
+        <div className="f-head text-[10px] text-[var(--muted)] mb-1.5">1 · Ganancia del mes</div>
+        <div className="space-y-0.5">
+          <Linea label={`Ventas × ${R.margenCfg}% de margen`} val={C(Math.round(R.brutaObjetivo))} />
+          {R.gananciaBruta < R.brutaObjetivo && (
+            <Linea label={`Se toma el margen real (${R.margenReal.toFixed(0)}%)`} val={C(Math.round(R.bruta))} />
+          )}
+          <Linea label="Gastos fijos del mes" val={"− " + C(Math.round(R.fijosDelMes))} />
+          {R.otrosDelMes > 0 && <Linea label="Otros gastos del mes" val={"− " + C(Math.round(R.otrosDelMes))} />}
+          <Linea label="Reserva de impuestos" val={"− " + C(Math.round(R.impMesDev))} />
+          {R.reintegroMes > 0 && <Linea label={`Reintegro a socios${R.aportePend > R.reintegroMes ? ` (de ${C(Math.round(R.aportePend))} pendientes)` : ""}`} val={"− " + C(Math.round(R.reintegroMes))} />}
+          <Linea label="Ganancia del mes" val={(R.gananciaMes < 0 ? "− " : "") + C(Math.abs(Math.round(R.gananciaMes)))} fuerte />
+          {R.retiradoMes > 0 && <Linea label="Ya se retiró este mes" val={"− " + C(Math.round(R.retiradoMes))} />}
         </div>
+
+        <div className="f-head text-[10px] text-[var(--muted)] mt-3 mb-1.5">2 · Chequeo de caja</div>
+        <div className="space-y-0.5">
+          <Linea label="Plata que hay hoy" val={C(Math.round(R.totalNegocio))} />
+          {R.porPagar > 0 && <Linea label="Facturas de proveedor" val={"− " + C(Math.round(R.porPagar))} />}
+          <Linea label="Impuestos apartados" val={"− " + C(Math.round(R.impuesto))} />
+          <Linea label="Reposición pendiente" val={"− " + C(Math.round(R.reponer))} />
+          <Linea label="Cupo de caja" val={C(Math.round(R.cupoCaja))} fuerte />
+        </div>
+
+        <div className="pt-2 mt-2 border-t border-[var(--line-strong)]">
+          <Linea label="Se toma el menor de los dos" val={C(Math.floor(R.retirable))} fuerte />
+        </div>
+
         <p className="text-[12px] text-[var(--muted)] mt-3 leading-relaxed">
-          {retirable <= 0
-            ? "Mientras alguno de los dos esté en cero, no hay nada que sacar sin debilitar la tienda."
-            : limita === "plata"
-              ? `Hoy manda la plata: el negocio ganó ${C(techoGanancia)} pero en efectivo solo hay ${C(libre)} sin comprometer. El resto de la ganancia está en sacos en la bodega y se vuelve plata conforme se venda.`
-              : `Hoy manda la ganancia: hay ${C(libre)} sueltos, pero el negocio solo generó ${C(techoGanancia)} este mes. Lo demás es capital de trabajo.`}
-          {retiradoMes > 0 && ` Este mes ya se retiraron ${C(retiradoMes)}.`}
+          {R.retirable <= 0
+            ? R.techoGanancia <= 0
+              ? "La ganancia del mes no da para retirar. No es que falte plata: es que el margen, después de fijos e impuestos, no dejó nada."
+              : `La ganancia da ${C(Math.round(R.techoGanancia))} pero la caja no alcanza: primero hay que dejar ${C(Math.round(R.reponer))} para reponer la bodega.`
+            : R.limita === "plata"
+              ? `Manda la caja: el mes generó ${C(Math.round(R.techoGanancia))} de ganancia, pero después de apartar la reposición quedan ${C(Math.round(R.cupoCaja))} disponibles.`
+              : `Manda la ganancia: hay ${C(Math.round(R.cupoCaja))} de cupo en caja, pero el mes solo generó ${C(Math.round(R.techoGanancia))}. Lo demás es capital.`}
+        </p>
+        <p className="text-[11px] text-[var(--muted)] mt-2 leading-relaxed border-t border-[var(--line)] pt-2">
+          La reposición no se resta de la ganancia: se exige que la plata alcance para las dos cosas.
         </p>
       </Card>
 
@@ -2830,43 +3093,67 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
         </Card>
       )}
 
-      {/* ---------- ¿se está reponiendo al ritmo que se vende? ---------- */}
-      {costo30 > 0 && (
-        <Card className="p-4">
-          <div className="flex items-baseline justify-between gap-3 mb-1">
-            <span className="f-head text-[11px]">Reposición · últimos 30 días</span>
-            <span className="f-mono text-[12px] text-[var(--muted)]">{alDia.toFixed(0)}% repuesto</span>
-          </div>
-          <p className="text-[12px] text-[var(--muted)] mb-3 leading-relaxed">
-            De cada ₡100 que entran por venta, <span className="font-medium text-[var(--ink)]">₡{pctCosto30.toFixed(0)} son del proveedor</span> y solo ₡{(100-pctCosto30).toFixed(0)} son ganancia. Esa parte hay que devolverla a la bodega.
-          </p>
+      {/* ---------- inventario: lo que hay contra lo que debería haber ---------- */}
+      <Card nivel={R.inv.sinBase ? "atencion" : "normal"} className="p-4">
+        <div className="flex items-baseline justify-between gap-3 mb-1">
+          <span className="f-head text-[11px]">Inventario</span>
+          {!R.inv.sinBase && R.inv.diasEnBodega != null && (
+            <span className="f-mono text-[12px] text-[var(--muted)]">
+              {R.inv.reponerPend > 0 ? "◐" : "○"} {R.inv.diasEnBodega.toFixed(0)} días en bodega
+            </span>
+          )}
+        </div>
 
-          <div className="space-y-1">
-            <Linea label="Se vendió" val={C(ventas30)} />
-            <Linea label="De eso, costo de la mercadería" val={C(costo30)} fuerte />
-            <Linea label="Ya se recompró" val={"− " + C(merca30)} />
-            <div className="pt-2 mt-1 border-t border-[var(--line-strong)]">
-              <Linea
-                label={reponer > 0 ? "● Falta reponer" : "○ Al día con la reposición"}
-                val={reponer > 0 ? C(reponer) : C(merca30 - costo30) + " de más"}
-                fuerte
-              />
+        {R.inv.sinBase ? (
+          <React.Fragment>
+            <p className="text-[13px] text-[var(--muted)] leading-relaxed mb-3">
+              ● Todavía no hay un conteo físico, así que el app no sabe cuánta comida hay en bodega
+              y no puede decir si falta reponer. Contá la bodega una vez a precio de costo y de ahí
+              en adelante lleva la cuenta solo.
+            </p>
+            <Btn kind="signal" className="w-full commit" onClick={()=>setConteo(true)}>Registrar el primer conteo</Btn>
+          </React.Fragment>
+        ) : (
+          <React.Fragment>
+            <div className="space-y-0.5">
+              <Linea label={`Contado el ${fmtFecha(R.inv.desde)}`} val={C(Math.round(R.inv.base))} />
+              <Linea label="Comprado desde entonces" val={"+ " + C(Math.round(R.inv.comprado))} />
+              {R.inv.contraPedido > 0 && (
+                <div className="flex justify-between items-baseline gap-3 text-[12px] text-[var(--muted)] pl-3">
+                  <span>no cuenta: {C(Math.round(R.inv.contraPedido))} contra pedido</span>
+                  <span className="f-mono">—</span>
+                </div>
+              )}
+              <Linea label="Vendido, a precio de costo" val={"− " + C(Math.round(R.inv.vendidoAlCosto))} />
+              <Linea label="Debería haber hoy" val={C(Math.round(R.inv.teorico))} fuerte />
             </div>
-          </div>
 
-          <div className="h-2.5 bg-[rgba(22,33,28,.12)] rounded-full overflow-hidden mt-3 border border-[var(--line-strong)]">
-            <div className="h-full bg-[var(--ink)]" style={{ width: Math.min(100, alDia) + "%" }} />
-          </div>
+            <div className="border-t border-[var(--line)] mt-3 pt-3 space-y-0.5">
+              <Linea label={`Objetivo · ${R.inv.dias} días de venta`} val={C(Math.round(R.inv.objetivo))} />
+              <Linea
+                label={R.inv.reponerPend > 0 ? "◐ Falta para llegar al objetivo" : "○ Por encima del objetivo"}
+                val={R.inv.reponerPend > 0 ? C(Math.round(R.inv.reponerPend)) : C(Math.round(R.inv.sobrante)) + " de más"}
+                fuerte />
+            </div>
 
-          <p className="text-[12px] text-[var(--muted)] mt-3 leading-relaxed">
-            {reponer > 0
-              ? `Se vendió ${C(costo30)} de mercadería y solo se repusieron ${C(merca30)}. Los ${C(reponer)} que faltan quedan apartados arriba: esa plata es del proveedor, no ganancia. Si se retira, la próxima compra no alcanza.`
-              : merca30 > costo30 * 1.3
-                ? `Se compró ${C(merca30 - costo30)} más de lo que se vendió. No está mal, pero es plata parqueada en sacos: revisá los días de inventario antes de seguir comprando.`
-                : "Las compras van al ritmo de las ventas. La bodega se mantiene y la ganancia es ganancia de verdad."}
-          </p>
-        </Card>
-      )}
+            <p className="text-[12px] text-[var(--muted)] mt-2.5 leading-relaxed">
+              {R.inv.reponerPend > 0
+                ? `Para volver a ${R.inv.dias} días de bodega faltan ${C(Math.round(R.inv.reponerPend))}. Esa plata se aparta antes de repartir, pero no baja la ganancia del mes: la ganancia ya está hecha.`
+                : `La bodega está por encima del objetivo, así que no se aparta nada para reponer. Si el sobrante crece mucho es plata parqueada en sacos.`}
+            </p>
+
+            {cfg.ultimoConteo && (
+              <p className="text-[11px] text-[var(--muted)] mt-2 leading-relaxed border-t border-[var(--line)] pt-2">
+                {Math.abs(cfg.ultimoConteo.diferencia) < 1
+                  ? `○ El conteo del ${fmtFecha(cfg.ultimoConteo.fecha)} calzó con lo que el app esperaba.`
+                  : `${cfg.ultimoConteo.diferencia < 0 ? "●" : "◐"} En el conteo del ${fmtFecha(cfg.ultimoConteo.fecha)} ${cfg.ultimoConteo.diferencia < 0 ? "faltaron" : "sobraron"} ${C(Math.abs(cfg.ultimoConteo.diferencia))} contra lo que el app esperaba.`}
+              </p>
+            )}
+
+            <Btn kind="ghost" className="w-full mt-3" onClick={()=>setConteo(true)}>Registrar conteo del mes</Btn>
+          </React.Fragment>
+        )}
+      </Card>
 
       {/* ---------- de dónde salió ese número ---------- */}
       <Card className="p-4">
@@ -3210,6 +3497,16 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
         Las ventas por SINPE y tarjeta entran directo al banco. Las de efectivo se quedan en la caja hasta que cerrás el día. Al cerrar, solo los billetes que pasan del fondo van a "por depositar"; las monedas se quedan siempre en la caja.
       </p>
 
+      {conteo && (
+        <ConteoModal
+          inv={R.inv}
+          cfg={cfg}
+          guardar={guardar}
+          aviso={aviso}
+          onClose={()=>setConteo(false)}
+        />
+      )}
+
       {cuadrarPend && (
         <CuadrePendienteModal
           pendiente={pendienteReal}
@@ -3400,6 +3697,118 @@ const RAZONES = [
 /* Cuadre de lo que falta depositar. La plata que el cierre dio por sacada y que
    no llegó al banco se fue a algún lado, y de dónde depende qué más hay que
    corregir. Por eso se pregunta en vez de borrarla en silencio. */
+/* Conteo físico del inventario. Compara lo que el app creía contra lo contado
+   y guarda la diferencia: eso es merma, robo o error de registro. */
+/* Fila de cliente con el mensaje listo para WhatsApp. El texto se puede editar
+   antes de mandarlo: un mensaje calcado se nota y no funciona. */
+function FilaCliente({ c, cfg, nota }) {
+  const [abierto, setAbierto] = useState(false);
+  const plantilla = (cfg && cfg.mensajeCliente) ||
+    "Hola {nombre}, le escribo de Patas CR. ¿Cómo va con el alimento? Si ya se le está acabando le tengo listo el pedido.";
+  const [txt, setTxt] = useState(plantilla.replace("{nombre}", (c.nombre||"").split(" ")[0]));
+
+  return (
+    <div className="py-1.5 border-b border-[var(--line)] last:border-0">
+      <button onClick={()=>setAbierto(!abierto)} className="w-full flex justify-between items-baseline gap-2 text-left min-h-[44px]">
+        <div className="min-w-0">
+          <div className="text-sm truncate">{c.nombre}</div>
+          <div className="text-[11px] text-[var(--muted)] f-mono">
+            compra cada {c.cadencia} días · última hace {c.desde} · {C(Math.round(c.ticket))} típico
+          </div>
+        </div>
+        <span className="f-mono text-[12px] shrink-0">{nota}</span>
+      </button>
+
+      {abierto && (
+        <div className="mt-2 pl-1">
+          <textarea value={txt} onChange={(e)=>setTxt(e.target.value)} rows={3}
+            className="w-full px-3 py-2 rounded-[8px] border border-[var(--line-strong)] bg-white text-[13px] leading-relaxed" />
+          <div className="flex gap-2 mt-2">
+            <a href={waLink(c.tel || "", txt)} target="_blank" rel="noreferrer"
+              className="f-head flex-1 inline-flex items-center justify-center text-[10px] min-h-[44px] rounded-[8px] border bg-[var(--signal)] text-white border-[var(--signal)]">
+              Abrir WhatsApp
+            </a>
+            <Btn kind="ghost" className="tap-44 px-3" onClick={()=>{ navigator.clipboard && navigator.clipboard.writeText(txt); }}>Copiar</Btn>
+          </div>
+          {!c.tel && (
+            <p className="text-[11px] text-[var(--muted)] mt-1.5 leading-relaxed">
+              ◐ No hay teléfono guardado de esta persona. WhatsApp abre sin número: pegá el mensaje en el chat.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConteoModal({ inv, cfg, guardar, aviso, onClose }) {
+  const [fecha, setFecha] = useState(hoyISO());
+  const [real, setReal] = useState("");
+  const m = num(real);
+  const dif = m > 0 ? m - inv.teorico : 0;
+
+  const grabar = async () => {
+    if (!(m > 0)) return;
+    await guardar("config", {
+      ...cfg, id: "general",
+      inventarioBase: m,
+      inventarioFecha: fecha,
+      ultimoConteo: {
+        fecha, real: m,
+        teorico: Math.round(inv.teorico),
+        diferencia: Math.round(dif),
+        desde: inv.desde || null,
+      },
+    });
+    aviso("Inventario actualizado · " + C(m));
+    onClose();
+  };
+
+  return (
+    <Modal title="Conteo de inventario" onClose={onClose}>
+      <div className="p-4">
+        <p className="text-[13px] text-[var(--muted)] leading-relaxed mb-3">
+          Contá la bodega a precio de costo y anotalo aquí. Desde esa fecha el app vuelve a
+          llevar la cuenta sumando compras y restando lo vendido al costo.
+        </p>
+
+        <Lbl>Fecha del conteo</Lbl>
+        <Inp type="date" value={fecha} onChange={(e)=>setFecha(e.target.value)} className="font-mono mb-3" />
+
+        <Lbl>Inventario contado, a precio de costo</Lbl>
+        <Inp inputMode="decimal" value={real} onChange={(e)=>setReal(e.target.value)}
+          placeholder="0" className="font-mono tabular-nums text-lg mb-3" />
+
+        {!inv.sinBase && (
+          <div className="rounded-[8px] border border-[var(--line-strong)] p-3 mb-3 space-y-0.5">
+            <Linea label="El app creía que había" val={C(Math.round(inv.teorico))} />
+            {m > 0 && <Linea label="Contaste" val={C(m)} />}
+            {m > 0 && (
+              <div className="pt-2 mt-1 border-t border-[var(--line)]">
+                <Linea
+                  label={Math.abs(dif) < 1 ? "○ Calza" : dif < 0 ? "● Falta en bodega" : "◐ Sobra en bodega"}
+                  val={(dif < 0 ? "− " : dif > 0 ? "+ " : "") + C(Math.abs(Math.round(dif)))}
+                  fuerte />
+              </div>
+            )}
+            {m > 0 && Math.abs(dif) >= 1 && (
+              <p className="text-[12px] text-[var(--muted)] leading-relaxed pt-1.5">
+                {dif < 0
+                  ? "Salió mercadería que no quedó registrada como venta: merma, producto dañado, regalos o ventas sin anotar."
+                  : "Hay más producto del que el app esperaba: compras sin registrar, o ventas anotadas que no salieron de bodega."}
+              </p>
+            )}
+          </div>
+        )}
+
+        <Btn kind="signal" className="w-full commit" disabled={!(m > 0)} onClick={grabar}>
+          Guardar conteo
+        </Btn>
+      </div>
+    </Modal>
+  );
+}
+
 function CuadrePendienteModal({ pendiente, guardar, usuario, aviso, onClose }) {
   const [monto, setMonto] = useState(String(Math.round(pendiente)));
   const [destino, setDestino] = useState(null);
@@ -3831,6 +4240,34 @@ function PrecioModal({ p, cfg, onClose, onSave, onDelete }) {
           <span className="text-[var(--muted)]">Para {cfg.margenSaco}%: {C(conIVA(costo/(1-cfg.margenSaco/100)))}</span>
           <span className="font-mono">{ms===null ? "—" : ind(ms,cfg.margenSaco).s + " " + ms.toFixed(1)+"%"}</span>
         </div>
+
+      {/* mayoreo: con estos precios el app deduce los kilos de las ventas a la
+         pulpería. Si quedan vacíos, usa los de mostrador y sobrestima el costo. */}
+      <div className="border-t border-[var(--line)] pt-3 mb-3">
+        <Lbl>Precio de mayoreo (pulpería)</Lbl>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Inp inputMode="decimal" value={f.precioMayoreo||""} onChange={(e)=>setF({...f, precioMayoreo:e.target.value})} placeholder="por kilo" className="font-mono" />
+          </div>
+          <div>
+            <Inp inputMode="decimal" value={f.precioMayoreoSaco||""} onChange={(e)=>setF({...f, precioMayoreoSaco:e.target.value})} placeholder="por saco" className="font-mono" />
+          </div>
+        </div>
+        <p className="text-[11px] text-[var(--muted)] mt-1.5 leading-relaxed">
+          Se usan solo en ventas con cliente «Pulpería». Si se dejan vacíos, el app deduce los kilos con el precio de mostrador y el costo sale inflado.
+        </p>
+      </div>
+
+      <button onClick={()=>setF({...f, gancho: !f.gancho})} aria-pressed={!!f.gancho}
+        className="w-full text-left px-3 py-2.5 rounded-[8px] border border-[var(--line-strong)] bg-white min-h-[48px] mb-3">
+        <span className="text-[13px]">
+          <span className="mr-1.5">{f.gancho ? "●" : "○"}</span>
+          Es producto gancho
+        </span>
+        <span className="block text-[11px] text-[var(--muted)] leading-snug mt-0.5">
+          Se vende con poco margen a propósito, para traer gente. El análisis deja de señalarlo como precio bajo.
+        </span>
+      </button>
         {num(f.precioKilo)>0 && num(f.precioSaco)>0 && peso>0 && (
           <p className="text-[11px] text-[var(--muted)] mt-1">Comprando el saco pagan {C(num(f.precioSaco)/peso)} por {f.unidad==="kg" ? "kilo" : "unidad"}, {(100-(num(f.precioSaco)/peso/num(f.precioKilo))*100).toFixed(0)}% menos que al granel.</p>
         )}
@@ -4007,13 +4444,21 @@ function Analisis({ ventas, gastos, precios, enlaces, cierres, cfg }) {
   /* productos con acción concreta de precio */
   const bajoMeta = useMemo(()=>(
     dispersion
-      .filter((p)=>p.pct < cfg.margenGranel)
+      .filter((p)=>!p.gancho)
       .map((p)=>{
-        const necesaria = p.costo > 0 ? conIVA(p.costo / (1 - cfg.margenGranel/100)) : 0;
-        return { ...p, falta: p.venta*(cfg.margenGranel-p.pct)/100, subida: necesaria > 0 ? (necesaria/p.venta - 1)*100 : 0 };
+        /* el saco se vende con menos margen a propósito: cada uno contra su meta */
+        const esSaco = (p.vSaco||0) > (p.vGranel||0);
+        const meta = esSaco
+          ? (cfg.margenSaco != null ? cfg.margenSaco : 15)
+          : (cfg.margenGranel != null ? cfg.margenGranel : 20);
+        const necesaria = p.costo > 0 ? conIVA(p.costo / (1 - meta/100)) : 0;
+        return { ...p, esSaco, meta,
+          falta: p.venta*(meta-p.pct)/100,
+          subida: necesaria > 0 ? (necesaria/p.venta - 1)*100 : 0 };
       })
+      .filter((p)=>p.pct < p.meta)
       .sort((a,b)=>b.falta-a.falta)
-  ), [dispersion, cfg.margenGranel]);
+  ), [dispersion, cfg.margenGranel, cfg.margenSaco]);
 
   /* ================= motor de hallazgos ================= */
   const hallazgos = useMemo(()=>{
@@ -4056,8 +4501,10 @@ function Analisis({ ventas, gastos, precios, enlaces, cierres, cfg }) {
       const top = bajoMeta.slice(0,3);
       h.push({
         sev: "●", titulo: `${top.length} producto${top.length===1?"":"s"} se vende${top.length===1?"":"n"} bien y deja${top.length===1?"":"n"} poco`,
-        detalle: top.map((p)=>`${p.nombre}: ${C(p.venta)} vendidos al ${p.pct.toFixed(0)}% de margen`).join(" · ") + `. La meta de granel es ${cfg.margenGranel}%.`,
-        accion: `Subí ${top[0].nombre} un ${top[0].subida.toFixed(0)}% (queda en ${C(Math.round(top[0].venta*(1+top[0].subida/100)/Math.max(1,top[0].veces)))} por venta típica) o aceptá que es gancho y dejalo escrito.`,
+        detalle: top.map((p)=>`${p.nombre}: ${C(p.venta)} vendidos al ${p.pct.toFixed(0)}% contra una meta de ${p.meta}% ${p.esSaco ? "en saco" : "al granel"}`).join(" · ") + ".",
+        accion: cfg.noSubirPrecios
+          ? `Sin subir precios quedan dos caminos. Uno: empujá ${top[0].nombre} con venta cruzada, que salga acompañado de algo de margen alto en vez de solo. Dos: sentate con el proveedor a revisar el costo o pedí escala por volumen. Si ninguno da, marcalo como gancho en Precios y dejá de verlo aquí.`
+          : `Subí ${top[0].nombre} un ${top[0].subida.toFixed(0)}% (queda en ${C(Math.round(top[0].venta*(1+top[0].subida/100)/Math.max(1,top[0].veces)))} por venta típica), o marcalo como gancho en Precios si lo vendés barato a propósito.`,
         plata: top.reduce((a,p)=>a+p.falta,0),
       });
     }
@@ -4392,9 +4839,14 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, movs, cfg,
   const impMesC = gastos.filter((g)=>mesDe(g.fecha)===mes).reduce((a,g)=>a+impuestoDe(g), 0);
   const retiroBruto = total * (margenC/100);
   const compromisos = fijosMens + impMesC;
-  const retiroMesC = Math.max(0, retiroBruto - compromisos);
-  const alcanza = retiroBruto >= compromisos;
-  const reponer = total * (1 - margenC/100);
+  /* La regla del margen es un OBJETIVO, no plata disponible. Lo que de verdad
+     se puede sacar lo dice calcRetiro, la misma cuenta que usa Dinero. */
+  const R = useMemo(()=>calcRetiro({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg }),
+    [ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg]);
+  const objetivo = Math.max(0, retiroBruto - compromisos);
+  const esMesEnCurso = mes === mesDe(hoyISO());
+  const retiroMesC = R.retirable;
+  const alcanza = retiroMesC > 0;
   const topeSig = total * ((cfg.pctTope != null ? cfg.pctTope : 70)/100);
   const mesSig = (()=>{ const [y,m] = mes.split("-").map(Number); return m===12 ? `${y+1}-01` : `${y}-${String(m+1).padStart(2,"0")}`; })();
   const yaRetirado = movs.filter((m)=>m.metodo==="retiro" && mesDe(m.fecha)===mes).reduce((a,m)=>a+Math.abs(m.monto),0)
@@ -4436,29 +4888,44 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, movs, cfg,
     return Object.values(m).sort((a,b)=>b.monto-a.monto);
   }, [delMes]);
 
-  const porVolver = useMemo(()=>{
+  /* Cadencia por mediana, no promedio: una compra atípica —un saco de más antes
+     de un viaje— corre el promedio y manda al cliente a la lista equivocada. */
+  const clientes = useMemo(()=>{
     const m = {};
     ventas.filter((v)=>v.cliente).forEach((v)=>{
-      const k = norm(v.cliente);
-      if (!m[k]) m[k] = { nombre: v.cliente, fechas: [], monto: 0 };
+      const k = aliasDe(v.cliente, cfg);
+      if (!m[k]) m[k] = { nombre: v.cliente, clave: k, fechas: [], monto: 0, tel: null };
       m[k].fechas.push(v.fecha); m[k].monto += v.monto;
+      if (!m[k].tel && v.telefono) m[k].tel = v.telefono;
     });
     const hoyStr = hoyISO();
     return Object.values(m)
-      .filter((c)=>c.fechas.length >= 2)
       .map((c)=>{
         const f = [...new Set(c.fechas)].sort();
         if (f.length < 2) return null;
-        let suma = 0;
-        for (let i=1; i<f.length; i++) suma += diasEntre(f[i], f[i-1]);
-        const cadencia = Math.round(suma / (f.length-1));
+        const huecos = [];
+        for (let i=1; i<f.length; i++) huecos.push(diasEntre(f[i], f[i-1]));
+        huecos.sort((a,b)=>a-b);
+        const mitad = Math.floor(huecos.length/2);
+        const cadencia = Math.round(huecos.length % 2 ? huecos[mitad] : (huecos[mitad-1]+huecos[mitad])/2);
         const ultima = f[f.length-1];
         const desde = diasEntre(hoyStr, ultima);
-        return { ...c, compras: f.length, cadencia, ultima, desde, atraso: desde - cadencia, ticket: c.monto/c.fechas.length };
+        return { ...c, compras: f.length, cadencia, ultima, desde,
+          faltan: cadencia - desde,
+          atraso: desde - cadencia,
+          ticket: c.monto/c.fechas.length };
       })
-      .filter((c)=>c && c.cadencia >= 5 && c.desde > c.cadencia * 1.25 && c.desde < 180)
-      .sort((a,b)=>b.atraso-a.atraso);
-  }, [ventas]);
+      .filter((c)=>c && c.cadencia >= 5 && c.desde < 180);
+  }, [ventas, cfg]);
+
+  const porVolver = useMemo(()=>
+    clientes.filter((c)=>c.desde > c.cadencia * 1.25).sort((a,b)=>b.atraso-a.atraso),
+  [clientes]);
+
+  /* los que todavía no se atrasaron pero les toca pronto: ahí sirve el mensaje */
+  const porTocar = useMemo(()=>
+    clientes.filter((c)=>c.faltan >= 0 && c.faltan <= 7).sort((a,b)=>a.faltan-b.faltan),
+  [clientes]);
 
   const porDia = useMemo(()=>{
     const m = {}; delMes.forEach((v)=>(m[v.fecha]=(m[v.fecha]||0)+v.monto));
@@ -4489,6 +4956,22 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, movs, cfg,
         conLineas: ventas.filter((v)=>Array.isArray(v.items) && v.items.length).length,
         desde: ventas.length ? ventas.map((v)=>v.fecha).sort()[0] : null,
         hasta: ventas.length ? ventas.map((v)=>v.fecha).sort().slice(-1)[0] : null,
+      },
+      /* La misma cuenta que muestran Dinero y el cierre. Va calculada y con sus
+         reglas escritas para que quien analice este archivo no la rehaga distinta. */
+      retiro: { ...R, calculadoEl: hoyISO() },
+      reglas: {
+        retirable: "El menor entre (plata que existe hoy − todo lo comprometido) y (ganancia del mes − lo ya retirado). Nunca negativo.",
+        comprometido: "Para el cupo de caja: reposición pendiente + impuestos apartados + facturas de proveedor por pagar. El colchón ya no entra en el cálculo.",
+        inventario: "Teórico = inventario del último conteo físico + compras de mercadería desde esa fecha − costo de lo vendido desde esa fecha. Cada conteo nuevo reemplaza la base y deja registrada la diferencia contra el teórico (merma o error de registro).",
+        reponer: "max(0, inventario objetivo − inventario teórico). El objetivo son N días de costo de venta, configurable. Si la bodega está por encima del objetivo, la reposición pendiente es cero. NO se resta de la ganancia: solo exige que la caja alcance.",
+        retiroModelo: "Dos techos. (1) Ganancia del mes = ventas × margen − gastos fijos − otros gastos − reserva de impuestos − reintegro a socios, tomando el menor entre el margen objetivo y el margen real. (2) Cupo de caja = plata que hay − facturas de proveedor − impuestos apartados − reposición pendiente. Se retira el menor de los dos, menos lo ya retirado en el mes.",
+        impuesto: "Régimen simplificado: 1% de renta + IVA según la tarifa de cada compra (2% si vino al 13%), por trimestre. Un trimestre con pago marcado como saldado deja de contar, aunque se haya pagado menos de lo calculado.",
+        margenCierre: "Es un OBJETIVO de pricing, no plata disponible. Sirve para comparar contra el margen real del mes. No se usa para decidir cuánto retirar.",
+        topeCompras: "Ventas del mes calendario anterior × % de tope. Solo cuenta la categoría Mercadería, y deja fuera las compras marcadas contra pedido.",
+        contraPedido: "Compra de mercadería que un cliente ya pidió. No entra al inventario disponible ni consume el tope del mes, porque no fue una decisión de surtido. El conteo físico mensual absorbe cualquier desvío.",
+        ganancia: "Sobre ventas cruzadas con la tabla de costos. Las ventas sin producto identificado se estiman con el margen conservador de Ajustes, así que la ganancia real puede diferir.",
+        advertencia: "No recalcular el retirable con otra fórmula. Si una cifra de este archivo no calza con otra, la buena es la de 'retiro'.",
       },
     };
     const url = URL.createObjectURL(new Blob([JSON.stringify(datos, null, 1)], { type: "application/json" }));
@@ -4561,49 +5044,71 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, movs, cfg,
       <Card nivel="principal" className="p-4">
         <div className="flex items-baseline justify-between gap-3 mb-3">
           <span className="f-head text-[11px]">Cierre de {mesLargo(mes)}</span>
-          {yaRetirado > 0 && <span className="f-mono text-[11px] text-[var(--muted)]">ya se sacaron {C(Math.round(yaRetirado))}</span>}
+          {R.retiradoMes > 0 && <span className="f-mono text-[11px] text-[var(--muted)]">ya se sacaron {C(Math.round(R.retiradoMes))}</span>}
         </div>
 
         <div className="mb-3">
-          <div className="text-[11px] text-[var(--muted)]">Para retirar entre {sociosC === 2 ? "los dos" : `los ${sociosC}`}</div>
+          <div className="text-[11px] text-[var(--muted)]">Se puede retirar hoy, entre {R.socios === 2 ? "los dos" : `los ${R.socios}`}</div>
           <div className="f-mono text-[34px] leading-none font-semibold tracking-[-.02em] my-1">
-            {alcanza ? "" : "● "}{C(Math.round(retiroMesC))}
+            {alcanza ? "" : "● "}{C(Math.floor(R.retirable))}
           </div>
-          {retiroMesC > 0 && (
-            <div className="text-[13px] text-[var(--muted)]">
-              <span className="f-mono text-[var(--ink)]">{C(Math.floor(retiroMesC/sociosC))}</span> para cada uno
-            </div>
-          )}
+          {alcanza && <div className="text-[13px] text-[var(--muted)]"><span className="f-mono text-[var(--ink)]">{C(R.porSocio)}</span> para cada uno</div>}
         </div>
 
-        <div className="space-y-0.5 border-t border-[var(--line)] pt-3">
-          <Linea label={`Ventas de ${mesLargo(mes)}`} val={C(Math.round(total))} />
-          <Linea label={`Margen del ${margenC}%`} val={C(Math.round(retiroBruto))} />
-          <Linea label="Menos gastos fijos del mes" val={"− " + C(Math.round(fijosMens))} />
-          {impMesC > 0 && <Linea label="Menos impuesto de las compras del mes" val={"− " + C(Math.round(impMesC))} />}
-          <Linea label="Queda para retirar" val={C(Math.round(retiroMesC))} fuerte />
+        <div className="f-head text-[10px] text-[var(--muted)] mb-1.5 border-t border-[var(--line)] pt-3">Ganancia del mes</div>
+        <div className="space-y-0.5">
+          <Linea label={`Ventas × ${R.margenCfg}% de margen`} val={C(Math.round(R.brutaObjetivo))} />
+          {R.gananciaBruta < R.brutaObjetivo && (
+            <Linea label={`Se toma el margen real (${R.margenReal.toFixed(0)}%)`} val={C(Math.round(R.bruta))} />
+          )}
+          <Linea label="Gastos fijos" val={"− " + C(Math.round(R.fijosDelMes))} />
+          {R.otrosDelMes > 0 && <Linea label="Otros gastos" val={"− " + C(Math.round(R.otrosDelMes))} />}
+          <Linea label="Reserva de impuestos" val={"− " + C(Math.round(R.impMesDev))} />
+          {R.reintegroMes > 0 && <Linea label={`Reintegro a socios${R.aportePend > R.reintegroMes ? ` (de ${C(Math.round(R.aportePend))} pendientes)` : ""}`} val={"− " + C(Math.round(R.reintegroMes))} />}
+          <Linea label="Ganancia del mes" val={(R.gananciaMes < 0 ? "− " : "") + C(Math.abs(Math.round(R.gananciaMes)))} fuerte />
+        </div>
+
+        <div className="f-head text-[10px] text-[var(--muted)] mt-3 mb-1.5">Chequeo de caja</div>
+        <div className="space-y-0.5">
+          <Linea label="Plata que hay hoy" val={C(Math.round(R.totalNegocio))} />
+          {R.porPagar > 0 && <Linea label="Facturas de proveedor" val={"− " + C(Math.round(R.porPagar))} />}
+          <Linea label="Impuestos apartados" val={"− " + C(Math.round(R.impuesto))} />
+          <Linea label="Reposición pendiente" val={"− " + C(Math.round(R.reponer))} />
+          <Linea label="Cupo de caja" val={C(Math.round(R.cupoCaja))} fuerte />
         </div>
 
         <p className="text-[12px] text-[var(--muted)] mt-2.5 leading-relaxed">
           {!alcanza
-            ? `● El ${margenC}% de las ventas (${C(Math.round(retiroBruto))}) no alcanza a cubrir los ${C(Math.round(compromisos))} que el mes ya debe: ${C(Math.round(fijosMens))} de gastos fijos${impMesC > 0 ? ` y ${C(Math.round(impMesC))} de impuesto sobre las compras` : ""}. Este mes no hay retiro: lo que falta sale del capital de trabajo.`
-            : `${impMesC > 0 ? `Los ${C(Math.round(impMesC))} de impuesto ya están descontados aunque se declaren hasta el cierre del trimestre. ` : ""}Esto es la meta según la regla del margen. Antes de sacarlo, mirá en Dinero si la plata está hoy: ahí se descuentan además las facturas a crédito y el colchón.`}
+            ? R.techoGanancia <= 0
+              ? "● La ganancia del mes no dio para retirar. El margen, después de fijos e impuestos, no dejó nada."
+              : `● La ganancia da ${C(Math.round(R.techoGanancia))}, pero la caja no alcanza: primero hay que dejar ${C(Math.round(R.reponer))} para reponer la bodega.`
+            : R.limita === "ganancia"
+              ? `Manda la ganancia: hay ${C(Math.round(R.cupoCaja))} de cupo en caja y el mes generó ${C(Math.round(R.techoGanancia))}.`
+              : `Manda la caja: el mes generó ${C(Math.round(R.techoGanancia))} y después de la reposición quedan ${C(Math.round(R.cupoCaja))}.`}
         </p>
 
-        {retiroMesC > 0 && (
+        {alcanza && (
           <Btn kind="signal" className="w-full commit mt-3" onClick={registrarRetiro}>
-            Registrar retiro · {sociosC} de {C(Math.floor(retiroMesC/sociosC))}
+            Registrar retiro · {R.socios} de {C(R.porSocio)}
           </Btn>
         )}
 
         <div className="border-t border-[var(--line)] mt-3 pt-3 space-y-0.5">
-          <Linea label="Plata para reponer inventario" val={C(Math.round(reponer))} fuerte />
-          <Linea label={`Tope de compras de ${mesLargo(mesSig)}`} val={C(Math.round(topeSig))} />
+          <div className="f-head text-[10px] text-[var(--muted)] mb-1.5">Margen de {mesLargo(mes)}</div>
+          <Linea label={`Objetivo (${margenC}% de ${C(Math.round(total))})`} val={C(Math.round(retiroBruto))} />
+          <Linea label={`Real (${margenBruto.toFixed(0)}% de lo vendido)`} val={C(Math.round(gananciaBruta))} />
+          <Linea label={gananciaBruta >= retiroBruto ? "Por encima del objetivo" : "Por debajo del objetivo"}
+            val={(gananciaBruta < retiroBruto ? "− " : "+ ") + C(Math.abs(Math.round(gananciaBruta - retiroBruto)))} fuerte />
         </div>
         <p className="text-[11px] text-[var(--muted)] mt-2 leading-relaxed">
-          Los {C(Math.round(reponer))} de reposición no se tocan: es la comida que ya se vendió y hay que volver a comprar.
-          El tope del mes entrante sale de estas mismas ventas.
+          {gananciaBruta >= retiroBruto
+            ? `El mes rindió por encima del ${margenC}% de meta.`
+            : `${margenBruto.toFixed(0)}% contra el ${margenC}% de la meta. Sale de precios por debajo del margen o de producto sin cruzar con la tabla de costos.`}
         </p>
+
+        <div className="border-t border-[var(--line)] mt-3 pt-3 space-y-0.5">
+          <Linea label={`Tope de compras de ${mesLargo(mesSig)}`} val={C(Math.round(topeSig))} />
+        </div>
       </Card>
 
       {/* ---------- 2. CONFIANZA DEL CÁLCULO ---------- */}
@@ -4719,21 +5224,39 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, movs, cfg,
         </Card>
       )}
 
-      {porVolver.length>0 && (
+      {(porVolver.length>0 || porTocar.length>0) && (
         <Card className="p-4">
-          <div className="text-[11px] uppercase tracking-[0.15em] text-[var(--muted)] mb-1">Clientes que ya deberían haber vuelto</div>
-          <p className="text-[11px] text-[var(--muted)] mb-3">Según cada cuánto compran normalmente. Son {C(porVolver.reduce((a,c)=>a+c.ticket,0))} en compras que no llegaron.</p>
-          {porVolver.slice(0,15).map((c,i)=>(
-            <div key={i} className="flex justify-between items-baseline py-1.5 border-b border-[var(--line)] last:border-0">
-              <div className="min-w-0">
-                <div className="text-sm truncate">{c.nombre}</div>
-                <div className="text-[11px] text-[var(--muted)] font-mono">compra cada {c.cadencia} días · última hace {c.desde}</div>
+          <div className="text-[11px] uppercase tracking-[0.15em] text-[var(--muted)] mb-1">Clientes</div>
+          <p className="text-[11px] text-[var(--muted)] mb-3">
+            Cada cuánto compra cada uno, por mediana de sus compras. Toca el nombre para escribirle.
+          </p>
+
+          {porTocar.length>0 && (
+            <React.Fragment>
+              <div className="f-head text-[10px] text-[var(--muted)] mb-1.5">◐ Le toca en los próximos 7 días</div>
+              {porTocar.slice(0,12).map((c,i)=>(
+                <FilaCliente key={"t"+i} c={c} cfg={cfg}
+                  nota={c.faltan === 0 ? "le toca hoy" : `le toca en ${c.faltan} día${c.faltan===1?"":"s"}`} />
+              ))}
+            </React.Fragment>
+          )}
+
+          {porVolver.length>0 && (
+            <React.Fragment>
+              <div className={"f-head text-[10px] text-[var(--muted)] mb-1.5 " + (porTocar.length>0 ? "mt-4 border-t border-[var(--line)] pt-3" : "")}>
+                ● Ya deberían haber vuelto
               </div>
-              <span className="font-mono tabular-nums text-[12px] shrink-0 ml-2">{c.atraso} días tarde</span>
-            </div>
-          ))}
-          <p className="text-[12px] text-[var(--muted)] mt-3 leading-relaxed">
-            Esta es la lista para reactivar por correo o WhatsApp. Se calcula con todo el historial, no solo con este mes.
+              {porVolver.slice(0,15).map((c,i)=>(
+                <FilaCliente key={"v"+i} c={c} cfg={cfg} nota={`${c.atraso} días tarde`} />
+              ))}
+              <p className="text-[12px] text-[var(--muted)] mt-2 leading-relaxed">
+                Son {C(porVolver.reduce((a,c)=>a+c.ticket,0))} en compras que no llegaron.
+              </p>
+            </React.Fragment>
+          )}
+
+          <p className="text-[11px] text-[var(--muted)] mt-3 leading-relaxed border-t border-[var(--line)] pt-2">
+            Si una persona aparece dos veces con el nombre escrito distinto, juntala en Ajustes → Alias de clientes.
           </p>
         </Card>
       )}
@@ -4900,6 +5423,18 @@ const B = ({ k, v, sub, grande }) => (
 
 function AjustesModal({ cfg, guardar, onClose }) {
   const [f, setF] = useState(cfg);
+  /* el mapa de alias se edita como texto y se vuelca a objeto al guardar */
+  const [aliasTexto, setAliasTexto] = useState(()=>Object.entries(cfg.aliasClientes||{})
+    .map(([k,v])=>`${k}: ${(v||[]).join(", ")}`).join("\n"));
+  const aliasObj = () => {
+    const o = {};
+    aliasTexto.split("\n").forEach((ln)=>{
+      const [k, resto] = ln.split(":");
+      if (!k || !k.trim()) return;
+      o[k.trim()] = (resto||"").split(",").map((x)=>x.trim()).filter(Boolean);
+    });
+    return o;
+  };
   return (
     <Modal title="Ajustes" onClose={onClose}>
       <div className="mb-3"><Lbl>Meta de ventas del mes</Lbl><Inp inputMode="decimal" value={f.meta} onChange={(e)=>setF({...f, meta:num(e.target.value)})} className="font-mono" /></div>
@@ -4915,6 +5450,46 @@ function AjustesModal({ cfg, guardar, onClose }) {
           </div>
         </div>
         <p className="text-[11px] text-[var(--muted)] -mt-2 mb-3">El tope dice cuánto se puede comprar este mes. El margen del cierre dice qué parte de las ventas es para ustedes; el resto es reposición. Los gastos fijos se editan en Registrar → Gastos fijos del mes.</p>
+
+        <div className="mb-3">
+          <Lbl>Reintegro a socios por mes</Lbl>
+          <Inp inputMode="decimal" value={f.reintegroMensual != null ? f.reintegroMensual : 50000} onChange={(e)=>setF({...f, reintegroMensual:num(e.target.value)})} className="font-mono" />
+          <p className="text-[11px] text-[var(--muted)] mt-1">Máximo que se devuelve cada mes de la plata que los socios metieron. Evita que un aporte grande se coma la ganancia de un solo mes.</p>
+        </div>
+
+        <div className="mb-3">
+          <Lbl>Alias de clientes</Lbl>
+          <textarea
+            value={aliasTexto}
+            onChange={(e)=>setAliasTexto(e.target.value)}
+            rows={4}
+            placeholder={"Isabel: isa, doña isabel\nPulpería: pulpe, la pulpería"}
+            className="w-full px-3 py-2 rounded-[8px] border border-[var(--line-strong)] bg-white text-[13px] leading-relaxed font-mono" />
+          <p className="text-[11px] text-[var(--muted)] mt-1 leading-relaxed">
+            Una persona por línea: el nombre bueno, dos puntos, y las otras formas en que aparece escrito, separadas por coma. Sin esto, cada manera de escribir el nombre cuenta como cliente distinto y la cadencia no sale.
+          </p>
+        </div>
+
+        <div className="mb-3">
+          <Lbl>Mensaje para clientes</Lbl>
+          <textarea
+            value={f.mensajeCliente || "Hola {nombre}, le escribo de Patas CR. ¿Cómo va con el alimento? Si ya se le está acabando le tengo listo el pedido."}
+            onChange={(e)=>setF({...f, mensajeCliente:e.target.value})}
+            rows={3}
+            className="w-full px-3 py-2 rounded-[8px] border border-[var(--line-strong)] bg-white text-[13px] leading-relaxed" />
+          <p className="text-[11px] text-[var(--muted)] mt-1">Se usa como base en el botón de WhatsApp. <span className="f-mono">{"{nombre}"}</span> se reemplaza por el primer nombre. Igual se puede editar antes de mandarlo.</p>
+        </div>
+
+        <button onClick={()=>setF({...f, noSubirPrecios: !f.noSubirPrecios})} aria-pressed={!!f.noSubirPrecios}
+          className="w-full text-left px-3 py-2.5 rounded-[8px] border border-[var(--line-strong)] bg-white min-h-[48px] mb-3">
+          <span className="text-[13px]">
+            <span className="mr-1.5">{f.noSubirPrecios ? "●" : "○"}</span>
+            No subir precios
+          </span>
+          <span className="block text-[11px] text-[var(--muted)] leading-snug mt-0.5">
+            Con esto activo, el análisis deja de sugerir subidas de precio y propone venta cruzada o revisar el costo con el proveedor.
+          </span>
+        </button>
 
         <Lbl>Impuestos</Lbl>
         <p className="text-[11px] text-[var(--muted)] leading-relaxed">
@@ -4982,10 +5557,20 @@ function AjustesModal({ cfg, guardar, onClose }) {
         <Lbl>Tarifa de IVA (%)</Lbl>
         <Inp inputMode="decimal" value={f.tarifaIVA != null ? f.tarifaIVA : 13} onChange={(e)=>setF({...f, tarifaIVA:num(e.target.value)})} className="font-mono" />
       </div>
+      <div className="grid grid-cols-2 gap-3 mb-1">
+        <div>
+          <Lbl>Inventario del último conteo</Lbl>
+          <Inp inputMode="decimal" value={f.inventarioBase||0} onChange={(e)=>setF({...f, inventarioBase:num(e.target.value)})} className="font-mono" />
+        </div>
+        <div>
+          <Lbl>Fecha de ese conteo</Lbl>
+          <Inp type="date" value={f.inventarioFecha||""} onChange={(e)=>setF({...f, inventarioFecha:e.target.value})} className="font-mono" />
+        </div>
+      </div>
       <div className="mb-3">
-        <Lbl>Inventario en bodega al empezar a contarlo</Lbl>
-        <Inp inputMode="decimal" value={f.inventarioIni||0} onChange={(e)=>setF({...f, inventarioIni:num(e.target.value)})} className="font-mono" />
-        <p className="text-[11px] text-[var(--muted)] mt-1">A precio de costo. Si lo dejás en cero, el contador arranca desde hoy y va a quedar corto unas semanas, hasta que se venda la mercadería vieja.</p>
+        <Lbl>Objetivo de bodega, en días de venta</Lbl>
+        <Inp inputMode="decimal" value={f.invObjetivoDias != null ? f.invObjetivoDias : 30} onChange={(e)=>setF({...f, invObjetivoDias:num(e.target.value)})} className="font-mono" />
+        <p className="text-[11px] text-[var(--muted)] mt-1">A precio de costo. Se mide contra el costo diario de los últimos 30 días, así que el objetivo sube y baja con el volumen. Lo normal es editarlo desde Dinero → Inventario → Registrar conteo, no aquí.</p>
       </div>
       <div className="grid grid-cols-2 gap-3 mb-3">
         <div>
@@ -5013,7 +5598,7 @@ function AjustesModal({ cfg, guardar, onClose }) {
           {f.excluirDomingos ? "○" : "—"} Excluir domingos del cálculo
         </button>
       </div>
-      <Btn kind="warn" className="w-full py-3" onClick={async ()=>{ await guardar("config", { ...f, id:"general" }); onClose(); }}>Guardar ajustes</Btn>
+      <Btn kind="warn" className="w-full py-3" onClick={async ()=>{ await guardar("config", { ...f, aliasClientes: aliasObj(), id:"general" }); onClose(); }}>Guardar ajustes</Btn>
     </Modal>
   );
 }
