@@ -1789,8 +1789,11 @@ function FijosModal({ fijos, gastos, guardar, borrar, onClose, aviso }) {
     const ultimo = new Date(+y, +m, 0).getDate();
     await window.FB.guardarLote("gastos", pendientes.map((f)=>({
       id: UID(), creado: Date.now(), fijoId: f.id,
-      fecha: `${y}-${m}-${String(Math.min(f.dia, ultimo)).padStart(2,"0")}`,
-      categoria: f.categoria, detalle: f.nombre, monto: f.monto, pago: "Otro"
+      fecha: `${y}-${m}-01`,                       /* se devenga el mes completo */
+      categoria: f.categoria, detalle: f.nombre, monto: f.monto, pago: "Otro",
+      /* se deben desde que arranca el mes, pero la plata no sale hasta pagarlos */
+      credito: true, pagado: false,
+      vence: `${y}-${m}-${String(Math.min(f.dia, ultimo)).padStart(2,"0")}`,
     })));
     aviso(pendientes.length + " gastos fijos cargados"); onClose();
   };
@@ -2380,8 +2383,12 @@ function calcRetiro({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cf
   const totalNegocio = caja + pendienteReal + banco;
 
   /* --- lo que ya tiene dueño --- */
-  const deudas = porVencer(gastos);
+  const pendientes = porVencer(gastos);
+  const deudas = pendientes.filter((g)=>!g.fijoId);
   const porPagar = deudas.reduce((a,g)=>a+g.monto,0);
+  /* fijos del mes en curso que todavía no se pagaron: la plata ya tiene dueño */
+  const fijosPend = pendientes.filter((g)=>g.fijoId && mesDe(g.fecha) <= mesAct);
+  const fijosPorPagar = fijosPend.reduce((a,g)=>a+g.monto,0);
 
   const porTrim = {};
   gastos.forEach((g)=>{
@@ -2421,7 +2428,8 @@ function calcRetiro({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cf
   const margenReal = ventasMes > 0 ? (G.bruta/ventasMes)*100 : 0;
   const margenCfg = cfg.margenCierre != null ? cfg.margenCierre : 22;
 
-  const fijosDelMes = gMes.filter((g)=>g.fijoId).reduce((a,g)=>a+g.monto,0);
+  /* devengado: el mes carga con sus fijos aunque se paguen el último día */
+  const fijosDelMes = gastos.filter((g)=>g.fijoId && mesDe(g.fecha)===mesAct).reduce((a,g)=>a+g.monto,0);
   const otrosDelMes = gMes.filter((g)=>g.categoria!=="Mercadería" && g.categoria!=="Impuestos" && !ES_RETIRO(g) && !g.fijoId).reduce((a,g)=>a+g.monto,0);
   /* impuesto que devengaron las compras del mes: es reserva, no se reparte */
   const impMesDev = gastos.filter((g)=>mesDe(g.fecha)===mesAct).reduce((a,g)=>a+impuestoDe(g), 0);
@@ -2443,17 +2451,18 @@ function calcRetiro({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cf
 
   /* chequeo de caja: la reposición no se resta de la ganancia, pero la plata
      tiene que alcanzar para las dos cosas. */
-  const cajaDisponible = totalNegocio - porPagar - impuesto;
+  const cajaDisponible = totalNegocio - porPagar - impuesto - fijosPorPagar;
   const cupoCaja = Math.max(0, cajaDisponible - reponer);
   const retirable = Math.max(0, Math.min(techoGanancia, cupoCaja));
   const socios = Math.max(1, cfg.socios || 2);
 
-  const comprometido = reponer + porPagar + impuesto;
+  const comprometido = reponer + porPagar + impuesto + fijosPorPagar;
   const libre = cupoCaja;
 
   return {
     mes: mesAct, totalNegocio, caja, pendienteReal, banco,
     inv: INV, reponer, fijosMensuales, aportePend, colchon, impuesto, porPagar,
+    fijosPend, fijosPorPagar,
     impMesDev, fijosDelMes, otrosDelMes, reintegroMes, reintegroTope,
     cajaDisponible, cupoCaja, comprometido, libre,
     ventasMes, gananciaBruta: G.bruta, brutaObjetivo, bruta, margenReal, margenCfg,
@@ -2609,8 +2618,13 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
   const ultimoCierre = ultimo ? ultimo.fecha : null;
   const monedas = ultimo ? (ultimo.monedas != null ? ultimo.monedas : 0) : 0;
   const gastosPlata = useMemo(()=>normPlata(gastos), [gastos]);
-  const deudas = useMemo(()=>porVencer(gastos), [gastos]);
+  /* las facturas de proveedor y los gastos fijos se deben los dos, pero se
+     miran distinto: uno es el proveedor, el otro es el mes corriendo. */
+  const pendTodo = useMemo(()=>porVencer(gastos), [gastos]);
+  const deudas = pendTodo.filter((g)=>!g.fijoId);
   const porPagar = deudas.reduce((a,g)=>a+g.monto,0);
+  const fijosPend = pendTodo.filter((g)=>g.fijoId);
+  const fijosPorPagar = fijosPend.reduce((a,g)=>a+g.monto,0);
 
   /* ---------- reserva de impuestos ----------
      Se devenga con cada compra y se paga por trimestre. La plata se aparta
@@ -2964,6 +2978,39 @@ function Dinero({ ventas, gastos, cierres, movs, precios, enlaces, fijos, cfg, g
       </Card>
 
       <TopeCompras t={calcTope(ventas, gastos, cfg, mesDe(hoyISO()))} />
+
+      {fijosPend.length > 0 && (
+        <Card className="p-4">
+          <div className="flex items-baseline justify-between gap-3 mb-1">
+            <span className="f-head text-[11px]">Gastos fijos por pagar</span>
+            <span className="f-mono text-[13px]">{C(Math.round(fijosPorPagar))}</span>
+          </div>
+          <p className="text-[12px] text-[var(--muted)] leading-relaxed mb-2">
+            El mes ya los debe, pero la plata sigue en el banco hasta que los pagués.
+            Por eso están apartados de lo que se puede retirar y no bajan el saldo todavía.
+          </p>
+          {fijosPend.map((g)=>(
+            <div key={g.id} className="flex items-baseline justify-between gap-3 py-1.5 border-b border-[var(--line)] last:border-0">
+              <div className="min-w-0">
+                <div className="text-[13px] truncate">
+                  <span className="text-[var(--muted)] mr-1.5">{g.dias != null && g.dias < 0 ? "●" : "◐"}</span>
+                  {g.detalle || g.categoria}
+                </div>
+                <div className="text-[11px] text-[var(--muted)] f-mono">
+                  {g.vence ? `vence ${fmtFecha(g.vence)}` : "sin fecha"}
+                  {g.dias != null && ` · ${g.dias < 0 ? `${-g.dias} días tarde` : `en ${g.dias} días`}`}
+                </div>
+              </div>
+              <div className="flex items-baseline gap-3 shrink-0">
+                <span className="f-mono text-[13px]">{C(g.monto)}</span>
+                <button onClick={()=>setPagando(g)} className="f-head text-[10px] text-[var(--signal)] underline underline-offset-2 min-h-[44px]">
+                  Marcar pagado
+                </button>
+              </div>
+            </div>
+          ))}
+        </Card>
+      )}
 
       {deudas.length > 0 && (
         <Card nivel="atencion" className="p-4">
@@ -4965,7 +5012,8 @@ function Reportes({ ventas, gastos, precios, fijos, enlaces, cierres, movs, cfg,
         comprometido: "Para el cupo de caja: reposición pendiente + impuestos apartados + facturas de proveedor por pagar. El colchón ya no entra en el cálculo.",
         inventario: "Teórico = inventario del último conteo físico + compras de mercadería desde esa fecha − costo de lo vendido desde esa fecha. Cada conteo nuevo reemplaza la base y deja registrada la diferencia contra el teórico (merma o error de registro).",
         reponer: "max(0, inventario objetivo − inventario teórico). El objetivo son N días de costo de venta, configurable. Si la bodega está por encima del objetivo, la reposición pendiente es cero. NO se resta de la ganancia: solo exige que la caja alcance.",
-        retiroModelo: "Dos techos. (1) Ganancia del mes = ventas × margen − gastos fijos − otros gastos − reserva de impuestos − reintegro a socios, tomando el menor entre el margen objetivo y el margen real. (2) Cupo de caja = plata que hay − facturas de proveedor − impuestos apartados − reposición pendiente. Se retira el menor de los dos, menos lo ya retirado en el mes.",
+        gastosFijos: "Se cargan el día 1 como devengados del mes, pero con la plata pendiente: bajan la ganancia del mes desde el arranque y solo salen del banco cuando se marcan pagados. Mientras tanto quedan reservados del cupo de caja.",
+        retiroModelo: "Dos techos. (1) Ganancia del mes = ventas × margen − gastos fijos − otros gastos − reserva de impuestos − reintegro a socios, tomando el menor entre el margen objetivo y el margen real. (2) Cupo de caja = plata que hay − facturas de proveedor − impuestos apartados − gastos fijos sin pagar − reposición pendiente. Se retira el menor de los dos, menos lo ya retirado en el mes.",
         impuesto: "Régimen simplificado: 1% de renta + IVA según la tarifa de cada compra (2% si vino al 13%), por trimestre. Un trimestre con pago marcado como saldado deja de contar, aunque se haya pagado menos de lo calculado.",
         margenCierre: "Es un OBJETIVO de pricing, no plata disponible. Sirve para comparar contra el margen real del mes. No se usa para decidir cuánto retirar.",
         topeCompras: "Ventas del mes calendario anterior × % de tope. Solo cuenta la categoría Mercadería, y deja fuera las compras marcadas contra pedido.",
